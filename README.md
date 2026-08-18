@@ -2,6 +2,7 @@
 > K-KODE is a biostatistical calculation tool provided strictly for **Research Use Only (RUO)**. It is **NOT** a medical device, clinical decision-support tool, or diagnostic instrument, and it has not been evaluated or cleared by the FDA, Health Canada, or any medical regulatory body. This software is intended solely for retrospective data analysis and mathematical modeling. It must not be used for patient diagnosis, clinical treatment planning, or direct patient care.
 
 # K-KODE (OcularExponentialOptimizer)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/EAI-BIO/KKODE-BIO/blob/main/demo.ipynb)
 
 An open-source, production-grade biostatistical engine designed for longitudinal Ellipsoid Zone (EZ) optical coherence tomography (OCT) tracking in USH2A retinopathy.
 
