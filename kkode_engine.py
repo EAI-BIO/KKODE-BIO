@@ -12,6 +12,9 @@ KEY CAPABILITIES IN THIS VERSION (v55.0):
    not structural EZ measurements, be the PRIMARY efficacy outcome - EZ
    area is mainly an enrollment criterion. A tool that only understands
    EZ width is modeling the field's secondary endpoint.
+   SOURCE: Birch DG, et al. (RUSH2A Study Group). "Endpoints and Design
+   for Clinical Trials in USH2A-Related Retinal Degeneration." Transl
+   Vis Sci Technol. https://tvst.arvojournals.org/article.aspx?articleid=2802114
 2. PROPER CENSORED-DATA HANDLING (Tobit-style MLE), not floor-and-drop.
    Every candidate model is fit per patient via maximum likelihood with
    a left-censored Gaussian likelihood: points above the measurement
@@ -21,11 +24,17 @@ KEY CAPABILITIES IN THIS VERSION (v55.0):
    information ("this patient was at least this far progressed") instead
    of discarding it, and avoids the downward bias that comes from
    dropping or clamping fast progressors.
+   SOURCE: Tobin J (1958). "Estimation of Relationships for Limited
+   Dependent Variables." Econometrica, 26(1), 24-36.
 3. FOUR CANDIDATE FUNCTIONAL FORMS competed per patient via AICc, using
    the same censored likelihood for all four so the comparison is
    apples-to-apples: Linear, Square-Root, Log-Exponential, and Power-Law.
    (Power-law needs t>0; baseline is offset by 1 day for that model only
    - see _prepare_predictor().)
+   SOURCE (AICc): Hurvich CM, Tsai CL (1989). "Regression and time series
+   model selection in small samples." Biometrika, 76(2), 297-307.
+   SOURCE (Akaike weights): Burnham KP, Anderson DR (2002). Model
+   Selection and Multimodel Inference (2nd ed). Springer.
 4. NUMERICAL-HESSIAN STANDARD ERRORS. Parameter uncertainty is computed
    from a central finite-difference Hessian of the negative
    log-likelihood at the fitted optimum, rather than trusting the
@@ -41,10 +50,17 @@ KEY CAPABILITIES IN THIS VERSION (v55.0):
    (population intercept/slope, between-patient variance, residual variance)
    with a mixed-effects model fit to each simulated trial, empirically
    measuring statistical power at candidate sample sizes.
+   SOURCE: Burton A, Altman DG, Royston P, Holder RL (2006). "The design
+   of simulation studies in medical statistics." Stat Med, 25(24), 4279-4292.
 6. HIERARCHICAL BAYESIAN CENSORED NLME (PyMC). Full population-level
    MCMC sampler (NUTS) using pm.Censored to estimate population decay (lambda)
    and between-patient variance directly from every observation including floor
    points, eliminating cohort-level survivorship bias under heavy censoring.
+   SOURCE (mixed-effects structure): Laird NM, Ware JH (1982).
+   "Random-effects models for longitudinal data." Biometrics, 38(4), 963-974.
+   SOURCE (implementation): PyMC probabilistic programming library,
+   https://www.pymc.io/
+FULL REFERENCE LIST WITH LINKS: see "Methodology & References" in README.md
 WHAT THIS VERSION DELIBERATELY DOES NOT CLAIM TO DO:
   - It does not ingest raw OCT images or do retinal layer segmentation.
     This engine assumes a reading center or imaging pipeline has already
@@ -277,7 +293,15 @@ class KKodeApexEngine:
             baseline = group['visit_date'].iloc[0]
             group['years_from_baseline'] = (group['visit_date'] - baseline).dt.days / 365.25
             processed.append(group)
-        self.clean_df = pd.concat(processed, ignore_index=True) if processed else pd.DataFrame()
+        if processed:
+            self.clean_df = pd.concat(processed, ignore_index=True)
+        else:
+            # Fall back to an empty frame that still carries the expected
+            # columns (group_id, endpoint, years_from_baseline), not a bare
+            # pd.DataFrame() with none at all -- otherwise downstream calls
+            # like clean_df.groupby("group_id") or clean_df[endpoint_column]
+            # raise KeyError instead of being correctly treated as "no data".
+            self.clean_df = df.assign(years_from_baseline=pd.Series(dtype=float))
         censoring_fraction = (n_at_or_below_floor / n_start) if n_start else 0.0
         self.data_quality_report = {
             "engine_version": "v55.0",
