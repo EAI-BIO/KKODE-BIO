@@ -11,7 +11,7 @@ WHAT MAKES THIS THE APEX VERSION (v55.0):
    recommendation is that functional endpoints (perimetry sensitivity),
    not structural EZ measurements, be the PRIMARY efficacy outcome - EZ
    area is mainly an enrollment criterion. A tool that only understands
-   EZ width is modeling the field's secondary endpoint.
+   EZ width is modeling the field's secondary endpoint.]
 2. PROPER CENSORED-DATA HANDLING (Tobit-style MLE), not floor-and-drop.
    Every candidate model is fit per patient via maximum likelihood with
    a left-censored Gaussian likelihood: points above the measurement
