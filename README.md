@@ -44,33 +44,31 @@ Legacy clinical trial tools force curved biological decay onto flat linear assum
 
 ## Quick Start
 
-\`\`\`python
-import pandas as pd
-from kkode_apex_engine_v55 import KKodeApexEngine
+    import pandas as pd
+    from kkode_apex_engine_v55 import KKodeApexEngine
 
-# 1. Load raw longitudinal visit dataset
-df = pd.read_csv("patient_retinal_data.csv")
+    # 1. Load raw longitudinal visit dataset
+    df = pd.read_csv("patient_retinal_data.csv")
 
-# 2. Initialize K-KODE v55.0 for any longitudinal endpoint
-engine = KKodeApexEngine(
-    data_source=df,
-    endpoint_column="static_perimetry_sensitivity_db",  # or 'ez_width_mm', 'ez_area_mm2', etc.
-    eye_column="eye",
-    measurement_floor=0.05,
-    higher_is_better=True
-)
+    # 2. Initialize K-KODE v55.0 for any longitudinal endpoint
+    engine = KKodeApexEngine(
+        data_source=df,
+        endpoint_column="static_perimetry_sensitivity_db",  # or 'ez_width_mm', 'ez_area_mm2', etc.
+        eye_column="eye",
+        measurement_floor=0.05,
+        higher_is_better=True
+    )
 
-# 3. Execute the complete analysis pipeline in one call
-results = engine.run_full_analysis(
-    target_power=0.80,
-    alpha=0.05,
-    therapeutic_efficacy=0.30,
-    run_simulation=True,
-    n_sims_per_candidate=150
-)
+    # 3. Execute the complete analysis pipeline in one call
+    results = engine.run_full_analysis(
+        target_power=0.80,
+        alpha=0.05,
+        therapeutic_efficacy=0.30,
+        run_simulation=True,
+        n_sims_per_candidate=150
+    )
 
-# 4. Print the executive biostatistical summary report
-print(engine.generate_report())
-\`\`\`
+    # 4. Print the executive biostatistical summary report
+    print(engine.generate_report())
 
 *(Update the import path above to match your repository's actual module filename if it differs.)*
