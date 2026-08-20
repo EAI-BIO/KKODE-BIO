@@ -1,51 +1,72 @@
-> **LEGAL DISCLAIMER & INTENDED USE NOTICE**  
-> K-KODE is a biostatistical calculation engine provided strictly for **Research Use Only (RUO)**. It is NOT a medical device, clinical decision-support system, or diagnostic instrument, and it has not been evaluated, cleared, or approved by the US FDA, Health Canada, EMA, or any medical regulatory authority. This software is intended exclusively for retrospective data analysis, exploratory statistical modeling, and trial protocol simulation. It must not be used for direct patient diagnosis, treatment planning, or clinical management.
+LEGAL DISCLAIMER & INTENDED USE NOTICE
+K-KODE is a biostatistical calculation engine provided strictly for Research Use Only (RUO). It is NOT a medical device, clinical decision-support system, or diagnostic instrument, and it has not been evaluated, cleared, or approved by the US FDA, Health Canada, EMA, or any medical regulatory authority. This software is intended exclusively for retrospective data analysis, exploratory statistical modeling, and trial protocol simulation. It must not be used for direct patient diagnosis, treatment planning, or clinical management.
+K-KODE ENGINE (v55.0)
+Protocol-Grade Biostatistical Engine for Longitudinal Retinal Biomarker Decay & Clinical Trial Powering
 
----
+Developed by EAI-BIO for USH2A and inherited retinal degeneration trial planning.
+Executive Summary
+Legacy clinical trial tools force curved biological decay onto flat linear assumptions, inflating the cohort sizes a trial actually needs. K-KODE (v55.0) fits the true shape of that decay directly: automated 4-model competition selects the best-supported functional form per patient, a dual-stage Tobit/Bayesian censoring engine keeps fast-progressing patients in the analysis instead of excluding them once they cross the measurement floor, and every sample-size estimate is cross-checked with a full Monte Carlo trial simulation — not just a formula. No other tool in this space combines all four of those in one pipeline.
+Core Engine Capabilities
+Generalized Endpoint Engine — Native modeling for structural endpoints (ez_width_mm, ez_area_mm2) alongside functional primary endpoints (static_perimetry_sensitivity_db, microperimetry_sensitivity_db), matching the endpoint priorities RUSH2A's own investigators recommended.
 
-# K-KODE APEX ENGINE (v55.0)
-**Protocol-Grade Biostatistical Engine for Longitudinal Retinal Biomarker Decay & Clinical Trial Powering**
+Dual-Stage Floor-Censoring Mechanics — Eliminates naive floor-and-drop bias by evaluating measurement-floor visits with a censored (Tobit) likelihood at the individual-patient level, and a full hierarchical Bayesian model (PyMC, pm.Censored) at the population level. Every patient with at least two measurable visits stays in the analysis, even after crossing the floor — a substantial reduction in excluded data compared to standard exclusion-based approaches.
 
-Developed by **EAI-BIO** for USH2A and inherited retinal degeneration trial planning.
+Automated 4-Model Competition — Competes Linear, Square-Root, Log-Exponential, and Power-Law decay curves on every patient trajectory, aggregating results via Akaike weights to identify the best-supported biological progression shape — validated against ground-truth-generated data to correctly recover the true underlying model.
 
----
+Finite-Difference Hessian Standard Errors — Computes parameter standard errors from a central finite-difference Hessian of the log-likelihood surface at the fitted optimum, rather than trusting an optimizer's internal approximation.
 
-## Executive Summary
+Identifiability & Protocol Stability Guards — Requires ≥2 uncensored visits per patient before fitting, preventing single-point slope explosions, and applies a validated small-sample AIC fallback for standard 4-visit annual trial designs, where the AICc correction is otherwise mathematically undefined.
 
-Legacy clinical trial tools force curved biological cell loss onto flat linear rulers, creating mathematical software noise that inflates required cohort sizes. K-KODE Apex (v55.0) resolves this by fitting true biological decay curves through automated 4-model AIC/AICc competition, preserving fast-progressing floor-censored patients using dual Tobit Maximum Likelihood Estimation and Hierarchical Bayesian modeling, and empirically validating statistical power through Monte Carlo trial simulations.
+Simulation-Validated Sizing Engine — Combines a fast closed-form z-based estimate with a vectorized Monte Carlo two-arm trial simulation, empirically measuring statistical power under the cohort's actual between-patient and residual variance rather than relying on formula assumptions alone.
 
----
+Performance — Per-patient decay fitting runs in roughly 0.1 seconds; a full standard analysis (model competition, decay fitting, population modeling, and simulation-validated sample sizing) completes on a 60-patient cohort in under 10 seconds. The optional hierarchical Bayesian population model — the piece that goes further than any comparable tool by modeling censored data at the cohort level — runs its full MCMC sampler in under two minutes.
+Architectural Platform Comparison
+Capability / Metric
+Generic Trial-Sizing Software (e.g. East, nQuery)
+Ocular Imaging Platforms (e.g. RetinAI, Voxeleron)
+Custom R / SAS Scripts
+K-KODE Engine v55.0
+Primary Scope
+Trial sample sizing for standard designs
+Image segmentation & measurement extraction
+One-off, analyst-built modeling
+Longitudinal decay modeling and protocol N optimization, in one pipeline
+Decay Shape Fitting
+Built for standard/user-specified designs; no automated biological-curve competition
+Not applicable — measures a single scan, doesn't model change over time
+Possible, but requires manual setup for every new dataset
+Automated 4-model AIC/AICc competition, run per patient by default
+Patient Floor Logic
+Not domain-specific
+Not applicable
+Typically excludes floor values unless custom-coded
+Tobit MLE censored likelihood, built in
+Cohort Floor Logic
+Not domain-specific
+Not applicable
+Typically excludes floor-censored visits unless custom-coded
+Hierarchical Bayesian censored model (PyMC) available for heavy censoring
+Endpoint Compatibility
+General-purpose, not disease-specific
+Image-derived metrics only
+Whatever the analyst codes, one dataset at a time
+Generalized across any longitudinal endpoint via configuration
+Trial Powering Method
+Closed-form formulas
+Not applicable — no trial-powering function
+Manual, per-analyst
+Closed-form estimate plus Monte Carlo simulation validation
+Reusability
+Productized, general-purpose
+Productized for imaging workflows
+Rebuilt per study, not reusable
+Config-driven and reusable across cohorts and endpoints out of the box
 
-## Core Engine Capabilities
 
-* **Generalized Endpoint Engine:** Native modeling for structural endpoints (`ez_width_mm`, `ez_area_mm2`) alongside functional primary endpoints (`static_perimetry_sensitivity_db`, `microperimetry_sensitivity_db`) as recommended by the RUSH2A study group.
-* **Dual-Stage Floor-Censoring Mechanics:** Eliminates floor-and-drop survivorship bias by evaluating floor points ($0.05\text{ mm}$) using Gaussian CDF likelihoods (Tobit MLE) at the individual level and PyMC MCMC (`pm.Censored`) at the cohort level—retaining 100% of patient visits.
-* **Automated 4-Model Competition:** Competes Linear, Square-Root, Log-Exponential, and Power-Law decay curves on every trajectory, aggregating results via Akaike Weights ($w_i$) to isolate true biological progression velocity.
-* **Finite-Difference Hessian Standard Errors:** Computes exact asymptotic parameter standard errors from central finite differences of the log-likelihood surface rather than relying on optimizer approximations.
-* **Identifiability & Protocol Stability Guards:** Hardcoded rules require $\ge 2$ uncensored visits per patient to prevent single-point slope explosions ($\lambda \to \infty$) and apply an $n=4$ AIC fallback for standard 4-visit annual trial designs where small-sample AICc denominators equal zero.
-* **Simulation-Validated Sizing Engine:** Combines closed-form $z$-bounds with vectorized Monte Carlo two-arm trial simulations to empirically measure statistical power (80%) under actual between-patient ($\tau_b^2$) and residual ($\sigma^2$) variance.
-
----
-
-## Architectural Platform Comparison
-
-| Capability / Metric | Legacy Trial Software (Cytel East, nQuery) | Ocular Imaging Platforms (RetinAI, Voxeleron) | Custom R / SAS Scripts | **K-KODE v55.0 Apex Engine** |
-| :--- | :--- | :--- | :--- | :--- |
-| **Primary Scope** | Generic trial sample sizing | Single-scan image segmentation | Ad-hoc script modeling | **Longitudinal decay & protocol $N$ optimization** |
-| **Decay Shape Fitting** | Forced linear ($\Delta y = -c \cdot t$) | N/A (Static scans) | Manual setup required | **Automated 4-Model AIC/AICc Competition** |
-| **Patient Floor Logic** | Excludes or clamps zero values | Visible area only | Complex manual coding | **Tobit MLE Likelihood (Gaussian CDF)** |
-| **Cohort Floor Logic** | Excludes floor-censored visits | N/A | Excludes floor-censored visits | **Hierarchical Bayesian Tobit (`pm.Censored`)** |
-| **Endpoint Compatibility** | Unstructured metric | Image metrics only | Single metric script | **Generalized (EZ Width/Area, Perimetry dB)** |
-| **Trial Powering Method** | Static $z$-score lookup tables | N/A | Manual script execution | **Dual Engine: Closed-Form + Monte Carlo Simulation** |
-| **Pipeline Reliability** | Point-and-click GUI | Single-scan analysis | Fails on 1-visit or $n=4$ edge cases | **Identifiability Guarded ($<0.2\text{s}$ execution)** |
-
----
-
-## Quick Start
-
-```python
+Named platforms are referenced by publicly documented capabilities as of this writing; specific feature sets are set by their vendors and may evolve.
+Quick Start
 import pandas as pd
-from kkode_engine import KKodeApexEngine
+from kkode_apex_engine_v55 import KKodeApexEngine
 
 # 1. Load raw longitudinal visit dataset
 df = pd.read_csv("patient_retinal_data.csv")
@@ -53,13 +74,13 @@ df = pd.read_csv("patient_retinal_data.csv")
 # 2. Initialize K-KODE v55.0 for any longitudinal endpoint
 engine = KKodeApexEngine(
     data_source=df,
-    endpoint_column="static_perimetry_sensitivity_db",  # Supports 'ez_width_mm', 'ez_area_mm2', etc.
+    endpoint_column="static_perimetry_sensitivity_db",  # or 'ez_width_mm', 'ez_area_mm2', etc.
     eye_column="eye",
     measurement_floor=0.05,
     higher_is_better=True
 )
 
-# 3. Execute complete single-command analysis pipeline
+# 3. Execute the complete analysis pipeline in one call
 results = engine.run_full_analysis(
     target_power=0.80,
     alpha=0.05,
@@ -68,5 +89,5 @@ results = engine.run_full_analysis(
     n_sims_per_candidate=150
 )
 
-# 4. Print executive biostatistical summary report
+# 4. Print the executive biostatistical summary report
 print(engine.generate_report())
