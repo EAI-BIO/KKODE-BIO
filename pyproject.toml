@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kkode-bio"
+version = "55.0.0"
+description = "Protocol-grade biostatistical engine for longitudinal retinal biomarker decay modeling and clinical trial sample sizing. Research Use Only (RUO)."
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [
+    { name = "EAI-BIO", email = "eric@eaiinc.ca" }
+]
+dependencies = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "scipy>=1.10",
+    "statsmodels>=0.14",
+]
+
+[project.optional-dependencies]
+bayesian = [
+    "pymc>=5.0",
+    "arviz>=0.15",
+]
+demo = [
+    "jupyter>=1.0",
+    "matplotlib>=3.5",
+]
+all = [
+    "kkode-bio[bayesian]",
+    "kkode-bio[demo]",
+]
+
+[tool.setuptools]
+py-modules = ["kkode_engine"]

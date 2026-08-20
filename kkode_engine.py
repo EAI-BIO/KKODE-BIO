@@ -1,9 +1,9 @@
 """
-K-KODE APEX ENGINE (v55.0)
+K-KODE ENGINE (v55.0)
 Generalized longitudinal biomarker decay engine + censored-data-aware
 model competition + simulation-validated clinical trial sample sizing,
 for USH2A / RUSH2A-style retinal degeneration trial planning.
-WHAT MAKES THIS THE APEX VERSION (v55.0):
+KEY CAPABILITIES IN THIS VERSION (v55.0):
 1. GENERALIZED ENDPOINT SUPPORT. Not hardcoded to EZ width. Any
    longitudinal numeric endpoint (EZ width, EZ area, static perimetry
    sensitivity, microperimetry sensitivity) can be passed in via
@@ -11,7 +11,7 @@ WHAT MAKES THIS THE APEX VERSION (v55.0):
    recommendation is that functional endpoints (perimetry sensitivity),
    not structural EZ measurements, be the PRIMARY efficacy outcome - EZ
    area is mainly an enrollment criterion. A tool that only understands
-   EZ width is modeling the field's secondary endpoint.]
+   EZ width is modeling the field's secondary endpoint.
 2. PROPER CENSORED-DATA HANDLING (Tobit-style MLE), not floor-and-drop.
    Every candidate model is fit per patient via maximum likelihood with
    a left-censored Gaussian likelihood: points above the measurement
@@ -54,7 +54,6 @@ WHAT THIS VERSION DELIBERATELY DOES NOT CLAIM TO DO:
   - It is not FDA-qualified or validated as a Drug Development Tool.
 """
 import os
-import json
 import logging
 import numpy as np
 import pandas as pd
@@ -196,7 +195,6 @@ def _numerical_hessian_se(x0: np.ndarray, x: np.ndarray, g_y: np.ndarray,
                 H[i, j] = H[j, i]
                 continue
             pi_p, pi_m = x0.copy(), x0.copy()
-            pj_p, pj_m = x0.copy(), x0.copy()
             if i == j:
                 pi_p[i] += eps
                 pi_m[i] -= eps
@@ -220,7 +218,7 @@ def _numerical_hessian_se(x0: np.ndarray, x: np.ndarray, g_y: np.ndarray,
 CANDIDATE_MODELS = ["Linear", "Square-Root", "Log-Exponential", "Power-Law"]
 class KKodeApexEngine:
     """
-    K-KODE APEX ENGINE v55.0
+    K-KODE ENGINE v55.0
     Generalized longitudinal biomarker decay + trial sample-size engine.
     """
     REQUIRED_BASE_COLUMNS = ['patient_id', 'visit_date']
@@ -626,7 +624,7 @@ class KKodeApexEngine:
         patient_codes, patient_uniques = pd.factorize(df["group_id"])
         coords = {"patient": patient_uniques}
         try:
-            with pm.Model(coords=coords) as bayes_model:
+            with pm.Model(coords=coords) as _:
                 mu_a = pm.Normal("mu_a", mu=float(np.mean(g_y_recorded)), sigma=3.0)
                 mu_b = pm.Normal("mu_b", mu=0.0, sigma=1.5)
                 tau_a = pm.HalfNormal("tau_a", sigma=1.5)
@@ -707,7 +705,7 @@ class KKodeApexEngine:
         cf = self.sample_size_closed_form
         sim = self.sample_size_simulated
         lines = []
-        lines.append(f"K-KODE APEX ENGINE v55.0 REPORT — Endpoint: {self.endpoint_column}")
+        lines.append(f"K-KODE ENGINE v55.0 REPORT — Endpoint: {self.endpoint_column}")
         lines.append("=" * 70)
         lines.append("")
         lines.append("DATA QUALITY")
@@ -762,4 +760,4 @@ class KKodeApexEngine:
         lines.append("docstring for explicit statements of what this engine does and does not do.")
         return "\n".join(lines)
 if __name__ == "__main__":
-    print("K-KODE Apex Engine v55.0 initialized successfully.")
+    print("K-KODE Engine v55.0 initialized successfully.")

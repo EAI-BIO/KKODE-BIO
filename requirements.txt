@@ -1,0 +1,12 @@
+# K-KODE Engine (v55.0) — core dependencies
+# Required for standard analysis: data cleaning, per-patient decay fitting,
+# 4-model AIC/AICc competition, mixed-effects NLME, closed-form and
+# simulation-based sample sizing.
+#
+# Install with:
+#   pip install -r requirements.txt
+
+pandas>=2.0
+numpy>=1.24
+scipy>=1.10
+statsmodels>=0.14

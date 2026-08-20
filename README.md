@@ -42,6 +42,32 @@ Legacy clinical trial tools force curved biological decay onto flat linear assum
 
 *Named platforms are referenced by publicly documented capabilities as of this writing; specific feature sets are set by their vendors and may evolve.*
 
+## Installation & Setup
+
+```bash
+git clone https://github.com/EAI-BIO/KKODE-BIO.git
+cd KKODE-BIO
+pip install -e .
+```
+
+This installs the core engine and its required dependencies (NumPy, pandas, SciPy, statsmodels). Two optional extras are available and installed separately, so a standard analysis never has to pull in packages it doesn't use:
+
+```bash
+pip install -e ".[bayesian]"   # adds PyMC + ArviZ, for the hierarchical Bayesian censored model
+pip install -e ".[demo]"       # adds Jupyter + Matplotlib, for running/exploring the demo notebook
+pip install -e ".[all]"        # both of the above
+```
+
+The Bayesian extra is only needed if you plan to call `fit_bayesian_censored_nlme()` directly, or if your cohort is heavily censored (>15% of visits at the measurement floor) and you want `run_full_analysis()` to auto-trigger it. `pip install pymc` compiles native code on first use and can require a working C compiler on some systems — this is a PyMC characteristic, not something specific to this engine.
+
+**Verify your installation** by running the built-in demo, which generates a synthetic 60-patient cohort and runs the full pipeline end to end:
+
+```bash
+python run_demo.py
+```
+
+If that prints a report with no errors, your environment is set up correctly.
+
 ## Quick Start
 
 ```python
@@ -72,3 +98,13 @@ results = engine.run_full_analysis(
 # 4. Print the executive biostatistical summary report
 print(engine.generate_report())
 ```
+
+## Running on Your Own Data (No Python Required)
+
+For teams who want results without writing any code, `run_kkode.py` wraps the pipeline above as a single command-line call:
+
+```bash
+python run_kkode.py --data your_clinical_export.csv --endpoint-column static_perimetry_sensitivity_db --eye-column eye --output ./results
+```
+
+Your CSV needs three columns at minimum: `patient_id`, `visit_date` (any format pandas can parse, e.g. `YYYY-MM-DD`), and whichever numeric biomarker column you pass to `--endpoint-column`. Run `python run_kkode.py --help` for the full list of options (target power, alpha, therapeutic efficacy assumption, simulation on/off, and more). Results are written as a plain-language report (`kkode_report.txt`) and a full structured results file (`kkode_results.json`) in the `--output` directory.

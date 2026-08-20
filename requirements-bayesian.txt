@@ -1,0 +1,17 @@
+# K-KODE Engine (v55.0) — optional Bayesian dependencies
+# Only required if you call fit_bayesian_censored_nlme() directly, or if
+# run_full_analysis() auto-triggers it on a heavily censored cohort
+# (>15% of visits at the measurement floor).
+#
+# The core engine runs fully without these installed — the standard
+# pipeline (model competition, decay fitting, NLME, sample sizing) never
+# imports pymc or arviz.
+#
+# Install with:
+#   pip install -r requirements-bayesian.txt
+#
+# Note: PyMC's NUTS sampler compiles native code at first run. On some
+# systems this requires a working C compiler (gcc/clang) already on PATH.
+
+pymc>=5.0
+arviz>=0.15
