@@ -23,14 +23,18 @@ bayesian = [
     "pymc>=5.0",
     "arviz>=0.15",
 ]
+viz = [
+    "matplotlib>=3.5",
+]
 demo = [
     "jupyter>=1.0",
     "matplotlib>=3.5",
 ]
 all = [
     "kkode-bio[bayesian]",
+    "kkode-bio[viz]",
     "kkode-bio[demo]",
 ]
 
 [tool.setuptools]
-py-modules = ["kkode_engine"]
+py-modules = ["kkode_engine", "kkode_viz"]

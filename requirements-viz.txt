@@ -1,0 +1,8 @@
+# K-KODE Engine (v55.0) — optional visualization dependencies
+# Only required if you import kkode_viz (plot_patient_fit, plot_cohort_overview).
+# The core engine and CLI runner never import matplotlib.
+#
+# Install with:
+#   pip install -r requirements-viz.txt
+
+matplotlib>=3.5

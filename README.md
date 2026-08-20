@@ -108,3 +108,42 @@ python run_kkode.py --data your_clinical_export.csv --endpoint-column static_per
 ```
 
 Your CSV needs three columns at minimum: `patient_id`, `visit_date` (any format pandas can parse, e.g. `YYYY-MM-DD`), and whichever numeric biomarker column you pass to `--endpoint-column`. Run `python run_kkode.py --help` for the full list of options (target power, alpha, therapeutic efficacy assumption, simulation on/off, and more). Results are written as a plain-language report (`kkode_report.txt`) and a full structured results file (`kkode_results.json`) in the `--output` directory.
+
+## Visualizing Results
+
+`kkode_viz.py` is an optional add-on for plotting trajectories directly from a fitted engine. It has no effect on the core pipeline — the standard analysis and CLI runner never import it or matplotlib.
+
+```bash
+pip install -r requirements-viz.txt
+```
+
+```python
+from kkode_viz import plot_patient_fit, plot_cohort_overview
+
+# After engine.run_full_analysis() has been called:
+plot_patient_fit(engine, group_id="PATIENT_001__OD", save_path="patient_001.png")
+plot_cohort_overview(engine, save_path="cohort_overview.png")
+```
+
+`plot_patient_fit` shows one patient's observed visits against their fitted decay curve, with floor-censored points marked distinctly (▼) from uncensored points (●) — so the censoring handling that drives this engine's core statistics is visible, not just reported as a percentage. `plot_cohort_overview` plots every patient's raw trajectory together, with censored visits highlighted, to make heavy floor-censoring or outlier patients legible at a glance across the full cohort.
+
+## Methodology & References
+
+Every statistical method and disease-specific parameter choice in this engine is drawn from a published, citable source — not an internal assumption. This section exists so any claim in this README or in the code can be independently checked.
+
+**Statistical methods:**
+
+- **Censored (Tobit) maximum-likelihood estimation** — Tobin, J. (1958). "Estimation of Relationships for Limited Dependent Variables." *Econometrica*, 26(1), 24–36. The foundational method for fitting a regression model when some outcomes are only known to be at-or-below (or at-or-above) a detection limit, rather than observed exactly.
+- **AICc small-sample bias correction** — Hurvich, C. M., & Tsai, C. L. (1989). "Regression and time series model selection in small samples." *Biometrika*, 76(2), 297–307. The correction term this engine applies when comparing candidate decay models on a per-patient basis, and the reason a fallback to plain AIC is required when a patient has exactly 4 visits (see `small_sample_correction_unavailable` in the code).
+- **Akaike weights / multimodel inference** — Burnham, K. P., & Anderson, D. R. (2002). *Model Selection and Multimodel Inference: A Practical Information-Theoretic Approach* (2nd ed.). Springer. The method used to convert per-model AICc values into the relative support weights reported for each candidate decay shape.
+- **Linear mixed-effects (random slope/intercept) modeling** — Laird, N. M., & Ware, J. H. (1982). "Random-effects models for longitudinal data." *Biometrics*, 38(4), 963–974. The standard population-level model this engine fits via `statsmodels.formula.api.mixedlm`.
+- **Hierarchical Bayesian censored modeling (PyMC / NUTS)** — implemented using [PyMC](https://www.pymc.io/), an open-source probabilistic programming library; `pm.Censored` is PyMC's built-in construct for exactly the left-censored-likelihood problem described above, extended here to a hierarchical (per-patient random effects) structure.
+- **Monte Carlo simulation for statistical power** — a standard technique in clinical trial design; see e.g. Burton, A., Altman, D. G., Royston, P., & Holder, R. L. (2006). "The design of simulation studies in medical statistics." *Statistics in Medicine*, 25(24), 4279–4292.
+
+**Disease-specific parameters and claims:**
+
+- **RUSH2A endpoint recommendations** (functional endpoints such as static/microperimetry sensitivity recommended as primary, over structural EZ measurements) — Birch, D. G., et al., on behalf of the RUSH2A Study Group. "Endpoints and Design for Clinical Trials in USH2A-Related Retinal Degeneration: Results and Recommendations From the RUSH2A Natural History Study." *Translational Vision Science & Technology*. [Full text (ARVO Journals)](https://tvst.arvojournals.org/article.aspx?articleid=2802114) · [PMC](https://pmc.ncbi.nlm.nih.gov/articles/PMC11469320/)
+- **Realistic EZ area decline rate used in `run_demo.py` and example charts** (≈ −0.34 mm²/year in patients with meaningfully preserved baseline EZ area) — same RUSH2A source as above. This replaced an earlier, uncalibrated synthetic test value that did not reflect real disease progression; flagged and corrected after review.
+- **USH2A gene/disease background** — Blanco-Kelly, F., et al. "USH2A-related disorders." *GeneReviews®* [Internet], NCBI Bookshelf ID: [NBK1341](https://www.ncbi.nlm.nih.gov/books/NBK1341/).
+
+If you find a claim anywhere in this repository that isn't backed by a source above, that's a gap worth reporting, not an assumption to trust — open an issue or flag it directly.
