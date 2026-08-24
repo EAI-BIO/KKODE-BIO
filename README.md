@@ -192,11 +192,11 @@ If you're a biostatistician, clinician, or researcher and find something wrong, 
 
 ## Acknowledgments
 
-Built for Kye. Named in part for Dr. Robert Koenekoop, McGill Ocular Genetics Laboratory.
+Built for Kye.
 
 ## License
 
-*(specify your chosen license here — e.g., MIT, Apache 2.0)*
+Apache License 2.0 — see [LICENSE](LICENSE) for full terms.
 
 ## Contact / Collaboration
 
