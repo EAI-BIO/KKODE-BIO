@@ -1,6 +1,6 @@
 # K-KODE
 
-**A biostatistical engine built for USH2A clinical trial design — cleaning raw longitudinal data, modeling each patient's decay curve, and validating trial sample sizes through both closed-form statistics and Monte Carlo simulation.**
+**A biostatistical engine for USH2A research, decay modeling, and clinical trial design — turning raw longitudinal patient data into rigorously validated trial sample sizes.**
 
 `EAI-BIO` · Elite Architecture Intelligence Inc. · Research Use Only (RUO)
 
