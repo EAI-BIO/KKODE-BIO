@@ -159,8 +159,15 @@ def _floor_in_transformed_space(model: str, floor_value: float) -> float:
     if model == "Linear":
         return floor_value
     if model == "Square-Root":
-        return np.sqrt(floor_value)
-    return np.log(floor_value)
+        return np.sqrt(max(floor_value, 0.0))
+    # Log-Exponential / Power-Law operate in log-space, where log(0) is
+    # undefined (-inf). A floor of exactly 0 is realistic for endpoints like
+    # perimetry sensitivity (dB), so treat it as a tiny positive epsilon
+    # rather than 0 -- this keeps censored (floor-hitting) observations as
+    # genuine, finite-probability events in the Tobit likelihood instead of
+    # forcing them to look effectively impossible regardless of the fit.
+    FLOOR_LOG_EPSILON = 1e-6
+    return np.log(max(floor_value, FLOOR_LOG_EPSILON))
 
 
 def _detect_plateau_floor(df: pd.DataFrame, value_column: str,
