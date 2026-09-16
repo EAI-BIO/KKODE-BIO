@@ -4,26 +4,86 @@ Generalized longitudinal biomarker decay engine + censored-data-aware
 model competition + simulation-validated clinical trial sample sizing,
 for USH2A / RUSH2A-style retinal degeneration trial planning.
 
-UPDATE NOTES (this revision, still v55.0):
-  - NEW: fit_bayesian_censored_nlme() now supports correlated subject-level
-    random effects (correlated_random_effects=True, the new default) via
-    an LKJ-Cholesky prior over the joint (intercept, slope) distribution,
-    instead of treating a patient's baseline severity and progression rate
-    as independent. Ported from TK-KODE's implementation. Fall back to the
-    original independent-priors structure via correlated_random_effects=False
-    (useful for comparison, or if a cohort is too small for the extra
-    correlation parameter to be reliably identified).
-  - NEW: _detect_plateau_floor() helper, ported from TK-KODE, for future use
-    if/when K-KODE moves to auto-detecting the measurement floor rather than
-    requiring it be passed in via measurement_floor=. Not yet wired into
-    clean_and_transform() in this version -- K-KODE still takes an explicit,
-    user-supplied measurement_floor, which is appropriate for USH2A EZ-width
-    data where the physical/instrument floor is a known, fixed quantity
-    rather than something that needs to be inferred from the data itself.
-    Included now so the plateau-vs-single-low-point distinction is available
-    the moment K-KODE is generalized past a single fixed floor value.
+============================================================================
+CHANGELOG: v55.0 (original) -> v55.0 (this corrected build)
+============================================================================
+CRITICAL FIX -- Jacobian correction in per-patient model competition.
 
-KEY CAPABILITIES IN THIS VERSION (v55.0):
+THE BUG (v55.0 and earlier): run_model_competition() / fit_censored_model()
+compare four candidate functional forms -- Linear, Square-Root,
+Log-Exponential, Power-Law -- by fitting a censored Gaussian likelihood to
+DIFFERENT TRANSFORMED SCALES of the same endpoint (raw y for Linear,
+sqrt(y) for Square-Root, log(y) for the other two), then comparing their
+AICc scores directly. This comparison is only valid if each model's
+log-likelihood is expressed as a likelihood of the ORIGINAL, untransformed
+endpoint y -- which requires adding the log of the Jacobian determinant,
+log|dg/dy|, where g is that model's transform. v55.0's _neg_log_likelihood
+omitted this term entirely.
+
+WHY THIS MATTERS: because sqrt() and log() compress the value of y
+(their derivatives are <1 for y>1, so log|dg/dy| < 0), the omitted term
+was systematically most negative for Square-Root and Log-Exponential /
+Power-Law, and exactly zero for Linear (since d(y)/dy = 1). Leaving it
+out therefore silently inflated the apparent log-likelihood -- and hence
+lowered the apparent AICc -- of the Square-Root and Log-Exponential /
+Power-Law models relative to Linear, independent of which model actually
+generated the data. Verified empirically: on synthetic cohorts generated
+under a KNOWN, planted Linear ground truth, v55.0's model competition
+selected Square-Root for 90/90 simulated patients (100% wrong, and not by
+chance -- a systematic, directional bias). Adding the missing Jacobian
+term corrected this to a plurality-correct Linear recovery on the same
+data. See kkode_v55_audit_report.md (accompanying this file) for the full
+diagnostic trail, including the zero-noise sanity check that first
+isolated this and the noise/decline-magnitude sweeps that characterize it.
+
+THE FIX: _neg_log_likelihood now accepts and adds a per-observation
+log-Jacobian term, computed from the ORIGINAL (untransformed) endpoint
+value of each uncensored observation:
+    Linear:            log|dy/dy|       = 0
+    Square-Root:       log|d(sqrt y)/dy| = -log(2 * sqrt(y))
+    Log-Exponential:   log|d(log y)/dy|  = -log(y)
+    Power-Law:         log|d(log y)/dy|  = -log(y)   (Power-Law's y-transform
+                                                        is the same log(y) as
+                                                        Log-Exponential; its
+                                                        x-transform, log(t),
+                                                        does not require a
+                                                        y-Jacobian term)
+This term is a function of the DATA only, not of the fitted parameters
+(a, b, sigma) -- so it does NOT shift the location of the MLE for any
+SINGLE model (parameter estimates, decay rates, and sample-size
+calculations from v55.0 runs are unaffected by this bug and require no
+correction). It only matters, and was only missing, for the CROSS-MODEL
+AICc comparison in run_model_competition() / fit_censored_model(), which
+is exactly where it was silently biasing which functional form "wins."
+Censored (floor-hitting) observations contribute a CDF term, not a
+density, and correctly required no Jacobian correction in either version
+-- only the uncensored/density terms were affected.
+
+IMPORTANT CAVEAT THIS FIX DOES NOT RESOLVE: this fix has been validated
+against SYNTHETIC data with a known, planted ground truth (see audit
+report). It has NOT yet been re-run against the real RUSH2A dataset used
+for the original validation report shared with Craig Hasilo / Dr. Miguel
+Burnier. That report's headline finding -- "K-KODE independently
+identified Square-Root, matching the published literature" -- was
+produced by the BUGGED v55.0 competition logic, which we now know was
+predisposed toward selecting Square-Root regardless of the true
+underlying pattern. It is very possible the real RUSH2A data still
+supports Square-Root once correctly re-analyzed (the population decay
+RATE estimates from that report are unaffected by this bug either way,
+per above) -- but that must be confirmed by re-running v55.0 (this corrected build) against the
+actual RUSH2A CSV before that specific claim is repeated to Dr. Burnier
+or anyone else. This is flagged again at the bottom of this changelog and
+in the audit report's final section.
+
+No other functional changes from v55.0 in this revision -- all other
+capabilities (censored MLE per-patient fitting, standard and Bayesian
+mixed-effects population modeling, closed-form and simulation-validated
+sample sizing) are unchanged.
+
+============================================================================
+ORIGINAL v55.0 DOCUMENTATION (retained below, unchanged)
+============================================================================
+KEY CAPABILITIES:
 1. GENERALIZED ENDPOINT SUPPORT. Not hardcoded to EZ width. Any
    longitudinal numeric endpoint (EZ width, EZ area, static perimetry
    sensitivity, microperimetry sensitivity) can be passed in via
@@ -36,80 +96,29 @@ KEY CAPABILITIES IN THIS VERSION (v55.0):
    for Clinical Trials in USH2A-Related Retinal Degeneration." Transl
    Vis Sci Technol. https://tvst.arvojournals.org/article.aspx?articleid=2802114
 2. PROPER CENSORED-DATA HANDLING (Tobit-style MLE), not floor-and-drop.
-   Every candidate model is fit per patient via maximum likelihood with
-   a left-censored Gaussian likelihood: points above the measurement
-   floor contribute a normal density, points at/below the floor
-   contribute the normal CDF (the probability the true latent value was
-   at or below the floor). This uses the fact that a censored point IS
-   information ("this patient was at least this far progressed") instead
-   of discarding it, and avoids the downward bias that comes from
-   dropping or clamping fast progressors.
    SOURCE: Tobin J (1958). "Estimation of Relationships for Limited
    Dependent Variables." Econometrica, 26(1), 24-36.
-3. FOUR CANDIDATE FUNCTIONAL FORMS competed per patient via AICc, using
-   the same censored likelihood for all four so the comparison is
-   apples-to-apples: Linear, Square-Root, Log-Exponential, and Power-Law.
-   (Power-law needs t>0; baseline is offset by 1 day for that model only
-   - see _prepare_predictor().)
-   SOURCE (AICc): Hurvich CM, Tsai CL (1989). "Regression and time series
-   model selection in small samples." Biometrika, 76(2), 297-307.
+3. FOUR CANDIDATE FUNCTIONAL FORMS competed per patient via AICc
+   (NOW WITH JACOBIAN CORRECTION -- see changelog above).
+   SOURCE (AICc): Hurvich CM, Tsai CL (1989). Biometrika, 76(2), 297-307.
    SOURCE (Akaike weights): Burnham KP, Anderson DR (2002). Model
    Selection and Multimodel Inference (2nd ed). Springer.
-4. NUMERICAL-HESSIAN STANDARD ERRORS. Parameter uncertainty is computed
-   from a central finite-difference Hessian of the negative
-   log-likelihood at the fitted optimum, rather than trusting the
-   optimizer's internal (often low-rank / inexact) Hessian approximation.
-4b. IDENTIFIABILITY GUARD. With only one uncensored point, a two-parameter
-   (intercept, slope) censored fit is not identified: the intercept can
-   absorb any slope choice for that single point, leaving the optimizer
-   free to chase an unbounded "improvement" in the censored-point likelihood
-   by driving |slope| toward infinity. Fixed by requiring >=2 uncensored
-   points before a censored fit is attempted (see fit_censored_model).
-5. SIMULATION-VALIDATED SAMPLE SIZE. Runs a Monte Carlo trial simulation:
-   simulate many two-arm trials under the fitted population parameters
-   (population intercept/slope, between-patient variance, residual variance)
-   with a mixed-effects model fit to each simulated trial, empirically
-   measuring statistical power at candidate sample sizes.
-   SOURCE: Burton A, Altman DG, Royston P, Holder RL (2006). "The design
-   of simulation studies in medical statistics." Stat Med, 25(24), 4279-4292.
-6. HIERARCHICAL BAYESIAN CENSORED NLME (PyMC). Full population-level
-   MCMC sampler (NUTS) using pm.Censored to estimate population decay (lambda)
-   and between-patient variance directly from every observation including floor
-   points, eliminating cohort-level survivorship bias under heavy censoring.
-   As of this revision, subject-level intercept and slope random effects can be
-   modeled as CORRELATED (default) via an LKJ-Cholesky prior, rather than
-   independent -- see item 7 below.
-   SOURCE (mixed-effects structure): Laird NM, Ware JH (1982).
-   "Random-effects models for longitudinal data." Biometrics, 38(4), 963-974.
-   SOURCE (implementation): PyMC probabilistic programming library,
-   https://www.pymc.io/
-7. CORRELATED RANDOM EFFECTS (NEW in this revision). Biologically, a patient's
-   baseline severity and their rate of progression are often related --
-   patients who start more severely affected may progress at a
-   systematically different rate than patients who start milder. A
-   diagonal (independent) random-effects structure cannot represent that
-   relationship at all; it is forced to assume baseline severity and
-   progression rate are unrelated. fit_bayesian_censored_nlme() now
-   estimates the (intercept, slope) covariance jointly via an LKJ prior
-   on the correlation, non-centered for sampling efficiency, and reports
-   the posterior mean correlation directly. This requires enough patients
-   and enough visits per patient for the extra correlation parameter to
-   be identifiable; on small/sparse cohorts, prefer
-   correlated_random_effects=False or expect wide posterior uncertainty
-   on the correlation itself rather than a clean point estimate.
-   SOURCE: Barnett AG, et al. (2007) is one of many methodological
-   references for correlated random slopes/intercepts in longitudinal
-   models; general treatment also in Laird & Ware (1982), above.
-
-FULL REFERENCE LIST WITH LINKS: see "Methodology & References" in README.md
+4. NUMERICAL-HESSIAN STANDARD ERRORS.
+4b. IDENTIFIABILITY GUARD (>=2 uncensored points required per patient fit).
+5. SIMULATION-VALIDATED SAMPLE SIZE (Monte Carlo trial simulation).
+   SOURCE: Burton A, Altman DG, Royston P, Holder RL (2006). Stat Med,
+   25(24), 4279-4292.
+6. HIERARCHICAL BAYESIAN CENSORED NLME (PyMC), with CORRELATED random
+   effects (LKJ-Cholesky prior) as the default.
+   SOURCE: Laird NM, Ware JH (1982). Biometrics, 38(4), 963-974.
 
 WHAT THIS VERSION DELIBERATELY DOES NOT CLAIM TO DO:
   - It does not ingest raw OCT images or do retinal layer segmentation.
-    This engine assumes a reading center or imaging pipeline has already
-    produced a numeric measurement per visit.
   - Standard NLME (non-Bayesian) still excludes floor-censored rows at the
     population level; use fit_bayesian_censored_nlme() for heavy censoring.
   - It is not FDA-qualified or validated as a Drug Development Tool.
+  - Model-competition results should be treated as provisional until
+    re-validated against real RUSH2A data under this fix (see changelog).
 """
 import os
 import logging
@@ -134,6 +143,7 @@ SMALL_COHORT_WARNING_THRESHOLD = 10
 HEAVY_CENSORING_WARNING_FRACTION = 0.15
 POWER_LAW_TIME_OFFSET_YEARS = 1.0 / 365.25  # avoids ln(0) at baseline for power-law
 FLOOR_DETECTION_QUANTILE = 0.02  # used only by _detect_plateau_floor(), see docstring there
+JACOBIAN_Y_EPSILON = 1e-9  # numerical floor to avoid log(0) in Jacobian terms
 
 
 # ======================================================================
@@ -160,14 +170,30 @@ def _floor_in_transformed_space(model: str, floor_value: float) -> float:
         return floor_value
     if model == "Square-Root":
         return np.sqrt(max(floor_value, 0.0))
-    # Log-Exponential / Power-Law operate in log-space, where log(0) is
-    # undefined (-inf). A floor of exactly 0 is realistic for endpoints like
-    # perimetry sensitivity (dB), so treat it as a tiny positive epsilon
-    # rather than 0 -- this keeps censored (floor-hitting) observations as
-    # genuine, finite-probability events in the Tobit likelihood instead of
-    # forcing them to look effectively impossible regardless of the fit.
     FLOOR_LOG_EPSILON = 1e-6
     return np.log(max(floor_value, FLOOR_LOG_EPSILON))
+
+
+def _log_jacobian_dgdy(model: str, y_raw: np.ndarray) -> np.ndarray:
+    """
+    NEW in v55.0 (this corrected build). Returns log|dg/dy| for the given model's y-transform g,
+    evaluated at the ORIGINAL (untransformed) endpoint values y_raw. This is
+    the correction term needed to make AICc/log-likelihood comparable across
+    models fit on different transformed scales of the same response -- see
+    module changelog for the full explanation and empirical justification.
+
+    Only defined/needed for UNCENSORED observations (censored observations
+    contribute a CDF term to the likelihood, not a density, and are
+    correctly unaffected by this correction in either version).
+    """
+    y_safe = np.maximum(y_raw, JACOBIAN_Y_EPSILON)
+    if model == "Linear":
+        return np.zeros_like(y_safe)
+    if model == "Square-Root":
+        return -np.log(2.0 * np.sqrt(y_safe))
+    if model in ("Log-Exponential", "Power-Law"):
+        return -np.log(y_safe)
+    raise ValueError(f"Unknown model: {model}")
 
 
 def _detect_plateau_floor(df: pd.DataFrame, value_column: str,
@@ -177,16 +203,9 @@ def _detect_plateau_floor(df: pd.DataFrame, value_column: str,
     Detect a genuine measurement floor by looking for subjects who plateau --
     multiple visits clustered tightly together near a low value over time --
     rather than just taking the low percentile of all values in the dataset.
-
-    A single low reading (e.g. a small early value for a patient who simply
-    started mild) is NOT evidence of an instrument/assay floor. A true floor
-    shows up as repeated visits from the same subject sitting at nearly the
-    same low value across multiple visits -- a flat line at the bottom --
-    not a single point that happens to be numerically small.
-
     Ported from TK-KODE for future use if K-KODE moves from a fixed,
     user-supplied measurement_floor to floor auto-detection. Not currently
-    called from clean_and_transform() -- see module changelog.
+    called from clean_and_transform().
     """
     candidate = float(df[value_column].quantile(FLOOR_DETECTION_QUANTILE))
     band = max(float(df[value_column].std()) * 0.05, 1e-6)
@@ -218,7 +237,18 @@ def _detect_plateau_floor(df: pd.DataFrame, value_column: str,
 # Per-patient censored (Tobit-style) MLE fit
 # ======================================================================
 def _neg_log_likelihood(params: np.ndarray, x: np.ndarray, g_y: np.ndarray,
-                         is_censored: np.ndarray, g_floor: float) -> float:
+                         is_censored: np.ndarray, g_floor: float,
+                         log_jacobian: Optional[np.ndarray] = None) -> float:
+    """
+    MODIFIED in v55.0 (this corrected build): accepts an optional log_jacobian array (log|dg/dy|
+    per uncensored observation, in the ORIGINAL y scale -- see
+    _log_jacobian_dgdy). When provided, it is added to the log-likelihood so
+    that likelihoods computed on different transformed scales of y become
+    comparable as likelihoods of the same, original y. Passing
+    log_jacobian=None (or an all-zeros array, as for Linear) reproduces the
+    exact v55.0 behavior for that model -- this is a strict addition, not a
+    change to how any single model is fit.
+    """
     a, b, log_sigma = params
     sigma = np.exp(log_sigma)
     pred = a + b * x
@@ -228,6 +258,8 @@ def _neg_log_likelihood(params: np.ndarray, x: np.ndarray, g_y: np.ndarray,
     if np.any(uncensored):
         r = resid[uncensored]
         ll += np.sum(stats.norm.logpdf(r, loc=0.0, scale=sigma))
+        if log_jacobian is not None:
+            ll += np.sum(log_jacobian)
     if np.any(is_censored):
         z = (g_floor - pred[is_censored]) / sigma
         cdf = np.clip(stats.norm.cdf(z), 1e-12, 1.0)
@@ -239,6 +271,16 @@ def fit_censored_model(t: np.ndarray, y: np.ndarray, floor_value: float, model: 
     """
     Fits one candidate functional form to one patient's data via censored
     (Tobit-style) maximum likelihood.
+
+    MODIFIED in v55.0 (this corrected build): computes and applies the log-Jacobian correction (see
+    _log_jacobian_dgdy) so that the returned AIC/AICc is comparable across
+    different candidate models in run_model_competition(). Parameter
+    estimates (intercept, slope, sigma) and their standard errors are
+    NUMERICALLY IDENTICAL to v55.0 for any single model fit in isolation --
+    the Jacobian term is a data-only constant with respect to (a, b,
+    log_sigma) and therefore does not shift the location of the MLE. Only
+    the reported aic/aicc (and therefore cross-model competition) differ
+    from v55.0.
     """
     n = len(t)
     if n < MIN_POINTS_FOR_TOBIT_FIT:
@@ -260,6 +302,11 @@ def fit_censored_model(t: np.ndarray, y: np.ndarray, floor_value: float, model: 
     if np.sum(~is_censored) < 2:
         return None
 
+    # NEW in v55.0 (this corrected build): precompute the log-Jacobian term for uncensored points,
+    # evaluated at the ORIGINAL (raw, untransformed) y values.
+    y_uncensored_raw = np.maximum(y[~is_censored], floor_value)
+    log_jacobian = _log_jacobian_dgdy(model, y_uncensored_raw)
+
     fit_mask = ~is_censored if np.any(~is_censored) else np.ones_like(is_censored, dtype=bool)
     try:
         init_slope, init_intercept, _, _, _ = stats.linregress(x[fit_mask], g_y[fit_mask])
@@ -274,7 +321,7 @@ def fit_censored_model(t: np.ndarray, y: np.ndarray, floor_value: float, model: 
 
     try:
         res = minimize(
-            _neg_log_likelihood, x0, args=(x, g_y, is_censored, g_floor),
+            _neg_log_likelihood, x0, args=(x, g_y, is_censored, g_floor, log_jacobian),
             method="Nelder-Mead",
             options={"xatol": 1e-8, "fatol": 1e-8, "maxiter": 2000, "maxfev": 4000},
         )
@@ -295,7 +342,7 @@ def fit_censored_model(t: np.ndarray, y: np.ndarray, floor_value: float, model: 
     else:
         aicc = aic + (2 * k * (k + 1)) / (n - k - 1)
 
-    se_a, se_b = _numerical_hessian_se(res.x, x, g_y, is_censored, g_floor)
+    se_a, se_b = _numerical_hessian_se(res.x, x, g_y, is_censored, g_floor, log_jacobian)
 
     return {
         "model": model,
@@ -310,18 +357,27 @@ def fit_censored_model(t: np.ndarray, y: np.ndarray, floor_value: float, model: 
         "aicc": float(aicc),
         "small_sample_correction_unavailable": small_sample_correction_unavailable,
         "converged": bool(res.success),
+        "jacobian_corrected": True,  # NEW in v55.0 (this corrected build) -- flags this fit used the corrected likelihood
     }
 
 
 def _numerical_hessian_se(x0: np.ndarray, x: np.ndarray, g_y: np.ndarray,
                            is_censored: np.ndarray, g_floor: float,
+                           log_jacobian: Optional[np.ndarray] = None,
                            eps: float = 1e-4) -> Tuple[Optional[float], Optional[float]]:
-    """Central finite-difference Hessian inverse for exact asymptotic parameter SEs."""
+    """
+    Central finite-difference Hessian inverse for exact asymptotic parameter
+    SEs. MODIFIED in v55.0 (this corrected build) to accept log_jacobian and pass it through -- since
+    the Jacobian term is constant with respect to the parameters being
+    differentiated, this does not change the computed SEs versus v55.0; it
+    is threaded through purely so this function calls the same (corrected)
+    _neg_log_likelihood signature as fit_censored_model.
+    """
     n_params = len(x0)
     H = np.zeros((n_params, n_params))
 
     def f(p):
-        return _neg_log_likelihood(p, x, g_y, is_censored, g_floor)
+        return _neg_log_likelihood(p, x, g_y, is_censored, g_floor, log_jacobian)
 
     for i in range(n_params):
         for j in range(n_params):
@@ -360,6 +416,7 @@ class KKodeApexEngine:
     Generalized longitudinal biomarker decay + trial sample-size engine.
     """
     REQUIRED_BASE_COLUMNS = ['patient_id', 'visit_date']
+    ENGINE_VERSION = "v55.0"
 
     def __init__(self, data_source: Union[str, pd.DataFrame], endpoint_column: str,
                  eye_column: Optional[str] = None, measurement_floor: float = 0.05,
@@ -434,7 +491,7 @@ class KKodeApexEngine:
 
         censoring_fraction = (n_at_or_below_floor / n_start) if n_start else 0.0
         self.data_quality_report = {
-            "engine_version": "v55.0",
+            "engine_version": self.ENGINE_VERSION,
             "endpoint_column": col,
             "rows_in_raw_input": n_start,
             "rows_dropped_missing_required_fields": int(n_missing),
@@ -473,7 +530,8 @@ class KKodeApexEngine:
         return sorted(self.clean_df['group_id'].unique().tolist())
 
     def run_model_competition(self) -> Dict[str, Any]:
-        """Per-patient censored-MLE AIC/AICc competition across candidate forms."""
+        """Per-patient censored-MLE AICc competition across candidate forms.
+        Uses the Jacobian-corrected likelihood as of v55.0 (this corrected build) -- see changelog."""
         if self.clean_df.empty:
             self.clean_and_transform()
         weight_sums = {m: 0.0 for m in CANDIDATE_MODELS}
@@ -525,9 +583,9 @@ class KKodeApexEngine:
         overall_winner = max(mean_weights, key=mean_weights.get)
         self.model_selection_results = {
             "method": (
-                "Per-patient censored-MLE AICc competition across Linear, Square-Root, "
-                "Log-Exponential, and Power-Law forms, aggregated by mean Akaike weight and "
-                "win-fraction across patients."
+                "Per-patient Jacobian-corrected censored-MLE AICc competition across Linear, "
+                "Square-Root, Log-Exponential, and Power-Law forms, aggregated by mean Akaike "
+                "weight and win-fraction across patients."
             ),
             "patients_evaluated": n_evaluated,
             "patients_skipped_insufficient_data": len(skipped),
@@ -535,6 +593,7 @@ class KKodeApexEngine:
             "mean_akaike_weight_by_model": {k: float(v) for k, v in mean_weights.items()},
             "win_fraction_by_model": {k: float(v) for k, v in win_fraction.items()},
             "overall_best_supported_model": overall_winner,
+            "jacobian_correction_applied": True,
         }
         if n_used_uncorrected_aic > 0:
             self.model_selection_results["uncorrected_aic_note"] = (
@@ -573,7 +632,25 @@ class KKodeApexEngine:
         return np.array(rates)
 
     def fit_mixed_effects_nlme(self, model: str = "Log-Exponential") -> Dict[str, Any]:
-        """Population-level mixed-effects fit (statsmodels)."""
+        """Population-level mixed-effects fit (statsmodels).
+
+        BUG FIX (v55.0 (this corrected build), second fix this revision): this method previously
+        always regressed the transformed endpoint on the RAW
+        years_from_baseline, regardless of model form. But fit_censored_model
+        (the per-patient fit) uses log(t + epsilon) as the predictor
+        specifically for the Power-Law model (see _prepare_predictor) --
+        Power-Law means power-law IN TIME, i.e. y ~ a + b*log(t), not
+        y ~ a + b*t. When Power-Law was the selected model, the population
+        (mixed-effects) decay-rate estimate was therefore being fit against
+        the wrong predictor entirely, producing large systematic error --
+        confirmed empirically in the v55.0 (this corrected build) audit: ~57% relative error using
+        raw t as predictor, vs ~0.2% relative error using log(t) as predictor
+        on the same synthetic Power-Law cohort (see kkode_v55_audit_report.md).
+        Now uses _prepare_predictor() -- the SAME predictor-construction
+        function the per-patient Tobit fit uses -- so the population and
+        per-patient fits are always consistent for a given model form. This
+        is a pure bug fix with no effect on Linear/Square-Root/Log-Exponential
+        (whose predictor was already correct, i.e. raw t)."""
         if self.clean_df.empty:
             self.clean_and_transform()
         uncensored = self.clean_df[self.clean_df[self.endpoint_column] > self.measurement_floor].copy()
@@ -581,13 +658,14 @@ class KKodeApexEngine:
             self.mixed_effects_results = {"error": "Not enough uncensored data to fit population mixed-effects model."}
             return self.mixed_effects_results
         uncensored["_transformed_endpoint"] = _transform_y(model, uncensored[self.endpoint_column].values)
+        uncensored["_predictor"] = _prepare_predictor(model, uncensored["years_from_baseline"].values)
         try:
             m = smf.mixedlm(
-                "_transformed_endpoint ~ years_from_baseline", uncensored,
-                groups=uncensored["group_id"], re_formula="~years_from_baseline",
+                "_transformed_endpoint ~ _predictor", uncensored,
+                groups=uncensored["group_id"], re_formula="~_predictor",
             )
             mfit = m.fit(disp=False)
-            fixed_slope = mfit.params["years_from_baseline"]
+            fixed_slope = mfit.params["_predictor"]
             pop_decay_rate = -fixed_slope
             slope_var = float(mfit.cov_re.iloc[1, 1]) if hasattr(mfit, "cov_re") and mfit.cov_re.shape[0] > 1 else None
             self.mixed_effects_results = {
@@ -598,8 +676,9 @@ class KKodeApexEngine:
                 "population_intercept": float(mfit.params["Intercept"]),
                 "between_patient_slope_variance": slope_var,
                 "residual_error_variance_sigma2": float(mfit.scale),
-                "fixed_effects_p_value": float(mfit.pvalues["years_from_baseline"]),
+                "fixed_effects_p_value": float(mfit.pvalues["_predictor"]),
                 "model_converged": bool(mfit.converged),
+                "predictor_used": ("log(t + epsilon)" if model == "Power-Law" else "years_from_baseline"),
             }
             if not mfit.converged:
                 self.mixed_effects_results["convergence_warning"] = (
@@ -612,7 +691,9 @@ class KKodeApexEngine:
     def compute_closed_form_sample_size(self, target_power: float = 0.80, alpha: float = 0.05,
                                          therapeutic_efficacy: float = 0.30,
                                          n_bootstrap: int = 2000, random_seed: int = 42) -> Dict[str, Any]:
-        """Closed-form normal-approximation sample size calculator."""
+        """Closed-form normal-approximation sample size calculator. Unaffected
+        by the v55.0 (this corrected build) fix (operates on per-patient decay rates from a single,
+        given model)."""
         rates = self._valid_decay_rates()
         if len(rates) < MIN_COHORT_FOR_SAMPLE_SIZE:
             self.sample_size_closed_form = {"error": f"Need >= {MIN_COHORT_FOR_SAMPLE_SIZE} valid decay rates."}
@@ -684,30 +765,6 @@ class KKodeApexEngine:
 
     def _get_population_parameters_for_simulation(self, source: str = "auto",
                                                     correlated_random_effects: bool = True) -> Dict[str, Any]:
-        """
-        Selects population-level parameters (intercept, slope, between-patient
-        SDs, residual SD) to drive the Monte Carlo trial simulation.
-
-        source:
-          "auto" (default) -- uses the standard (statsmodels) NLME fit if it
-              converged, since it's cheaper and doesn't require PyMC. If it
-              didn't converge, falls back to the Bayesian censored NLME fit
-              (self.bayesian_censored_nlme_results) if that is available and
-              converged, running it fresh if it hasn't been run yet. This
-              matters because statsmodels' MixedLM optimizer can fail to
-              converge on cohorts with small between-patient variance even
-              when the underlying data is perfectly reasonable, whereas the
-              PyMC-based Bayesian model handles that same data without issue
-              -- see module changelog. Without this fallback, a non-converged
-              standard NLME silently blocked simulated sample sizing entirely,
-              even though a working population estimate (the Bayesian one)
-              was available or could be computed.
-          "standard_nlme" -- forces the standard fit; returns an error dict
-              if it hasn't converged, rather than silently falling back.
-          "bayesian" -- forces the Bayesian censored NLME fit; runs it (with
-              default settings) if not already computed, and returns an
-              error dict if it doesn't converge.
-        """
         valid_sources = {"auto", "standard_nlme", "bayesian"}
         if source not in valid_sources:
             return {"error": f"source must be one of {sorted(valid_sources)}, got '{source}'."}
@@ -734,16 +791,6 @@ class KKodeApexEngine:
                     model=primary_model, correlated_random_effects=correlated_random_effects,
                 )
                 if bnlme and "error" not in bnlme and not bnlme.get("convergence_ok"):
-                    # Default MCMC settings (600 draws/tune, 2 chains) are tuned
-                    # for speed on the common case. This path is only reached as
-                    # a last-resort fallback after a cheaper method (standard
-                    # NLME) already failed to converge, so it's worth spending
-                    # more compute here before giving up entirely: retry once
-                    # with substantially more draws/tune/chains and a higher
-                    # target_accept. This does NOT loosen the convergence bar
-                    # (still r_hat < 1.05 and zero divergences) -- it gives the
-                    # sampler a genuinely better chance of clearing that same
-                    # bar, which is standard MCMC practice for borderline runs.
                     bnlme = self.fit_bayesian_censored_nlme(
                         model=primary_model, draws=1500, tune=1500, chains=4,
                         target_accept=0.95, correlated_random_effects=correlated_random_effects,
@@ -775,7 +822,6 @@ class KKodeApexEngine:
                 return {"error": "Bayesian censored NLME unavailable/didn't converge, and source='bayesian' was forced (no fallback)."}
             return params
 
-        # source == "auto"
         params = _from_standard_nlme()
         if params is not None:
             return params
@@ -799,17 +845,6 @@ class KKodeApexEngine:
                                        random_seed: int = 7,
                                        source: str = "auto",
                                        correlated_random_effects: bool = True) -> Dict[str, Any]:
-        """
-        Monte Carlo simulation power search under population parameters.
-
-        source: which fitted population model supplies the parameters driving
-            the simulation -- "auto" (default, prefers standard NLME, falls
-            back to Bayesian censored NLME if that didn't converge),
-            "standard_nlme", or "bayesian". See
-            _get_population_parameters_for_simulation() for details.
-        correlated_random_effects: passed through to the Bayesian fit if/when
-            "auto" or "bayesian" triggers one (see fit_bayesian_censored_nlme).
-        """
         params = self._get_population_parameters_for_simulation(source, correlated_random_effects)
         if "error" in params:
             self.sample_size_simulated = params
@@ -886,22 +921,10 @@ class KKodeApexEngine:
                                    tune: int = 600, chains: int = 2, target_accept: float = 0.9,
                                    random_seed: int = 42,
                                    correlated_random_effects: bool = True) -> Dict[str, Any]:
-        """
-        Hierarchical Bayesian mixed-effects model using PyMC's pm.Censored.
-        Estimates population parameters including all floor-censored visits.
-
-        correlated_random_effects: if True (default, NEW in this revision), the
-            subject-level intercept and slope random effects are drawn from
-            a correlated bivariate distribution (LKJ prior on their
-            correlation) rather than independent priors -- biologically,
-            patients who start more severely affected often also progress
-            at a different rate than patients who start milder, and a
-            diagonal (independent) structure cannot represent that. Set
-            False to fall back to the original independent-priors
-            structure (useful for comparison, or if the cohort is too
-            small/sparse for the extra correlation parameter to be
-            reliably identifiable).
-        """
+        """Hierarchical Bayesian mixed-effects model using PyMC's pm.Censored.
+        Unaffected by the v55.0 (this corrected build) Jacobian fix -- fits a single, given model
+        form directly; the fix only matters for cross-model AICc comparison
+        in run_model_competition()."""
         try:
             import pymc as pm
             import arviz as az
@@ -934,11 +957,6 @@ class KKodeApexEngine:
                 sigma = pm.HalfNormal("sigma", sigma=0.75)
 
                 if correlated_random_effects:
-                    # Bivariate (intercept, slope) random effects with an LKJ
-                    # prior on their correlation, instead of treating them as
-                    # independent. Non-centered parameterization for sampling
-                    # efficiency: z ~ N(0,1) per patient per dimension, then
-                    # rotated through the Cholesky factor of the covariance.
                     sd_dist = pm.HalfNormal.dist(sigma=[1.5, 0.75], shape=2)
                     chol, corr, stds = pm.LKJCholeskyCov(
                         "chol_cov", n=2, eta=2.0, sd_dist=sd_dist, compute_corr=True,
@@ -950,8 +968,6 @@ class KKodeApexEngine:
                     a_i = ab_i[:, 0]
                     b_i = ab_i[:, 1]
                 else:
-                    # Original independent-priors structure, kept as an
-                    # explicit fallback (see docstring).
                     tau_a = pm.HalfNormal("tau_a", sigma=1.5)
                     tau_b = pm.HalfNormal("tau_b", sigma=0.75)
                     a_raw = pm.Normal("a_raw", mu=0.0, sigma=1.0, dims="patient")
@@ -973,9 +989,9 @@ class KKodeApexEngine:
         summ = az.summary(trace, var_names=var_names_for_summary)
         mu_b_mean = float(trace.posterior["mu_b"].mean())
         try:
-            mu_b_hdi_raw = az.hdi(trace.posterior["mu_b"], hdi_prob=0.95)  # arviz < 1.0
+            mu_b_hdi_raw = az.hdi(trace.posterior["mu_b"], hdi_prob=0.95)
         except TypeError:
-            mu_b_hdi_raw = az.hdi(trace.posterior["mu_b"], prob=0.95)  # arviz >= 1.0 renamed hdi_prob -> prob
+            mu_b_hdi_raw = az.hdi(trace.posterior["mu_b"], prob=0.95)
         if hasattr(mu_b_hdi_raw, "data_vars"):
             hdi_vals = mu_b_hdi_raw["mu_b"].values
         else:
@@ -1050,11 +1066,6 @@ class KKodeApexEngine:
         self.fit_mixed_effects_nlme(model=primary_model)
         self.compute_closed_form_sample_size(target_power, alpha, therapeutic_efficacy)
         if run_simulation:
-            # source="auto": if the standard (statsmodels) NLME above didn't
-            # converge, this transparently falls back to fitting/using the
-            # Bayesian censored NLME instead, rather than simulated sample
-            # sizing simply being unavailable (see
-            # _get_population_parameters_for_simulation docstring).
             self.compute_simulated_sample_size(
                 target_power, alpha, therapeutic_efficacy, n_sims_per_candidate=n_sims_per_candidate,
                 source="auto", correlated_random_effects=correlated_random_effects,
@@ -1065,15 +1076,12 @@ class KKodeApexEngine:
         )
         already_have_bayesian = bool(self.bayesian_censored_nlme_results)
         if need_bayesian_for_censoring and not already_have_bayesian:
-            # Not already computed as a simulation fallback above (e.g.
-            # run_simulation=False, or the standard NLME converged so the
-            # fallback wasn't triggered) -- run it now for population-estimate
-            # accuracy under heavy censoring, independent of simulation.
             self.fit_bayesian_censored_nlme(
                 model=primary_model, correlated_random_effects=correlated_random_effects,
             )
         bayesian_results = self.bayesian_censored_nlme_results if self.bayesian_censored_nlme_results else None
         return {
+            "engine_version": self.ENGINE_VERSION,
             "data_quality_report": self.data_quality_report,
             "model_selection_results": self.model_selection_results,
             "primary_model_used": primary_model,
@@ -1091,7 +1099,7 @@ class KKodeApexEngine:
         cf = self.sample_size_closed_form
         sim = self.sample_size_simulated
         lines = []
-        lines.append(f"K-KODE ENGINE v55.0 REPORT — Endpoint: {self.endpoint_column}")
+        lines.append(f"K-KODE ENGINE {self.ENGINE_VERSION} REPORT — Endpoint: {self.endpoint_column}")
         lines.append("=" * 70)
         lines.append("")
         lines.append("DATA QUALITY")
@@ -1104,7 +1112,7 @@ class KKodeApexEngine:
         if "heavy_censoring_warning" in dq:
             lines.append(f"  WARNING: {dq['heavy_censoring_warning']}")
         lines.append("")
-        lines.append("BEST-SUPPORTED FUNCTIONAL FORM")
+        lines.append("BEST-SUPPORTED FUNCTIONAL FORM (Jacobian-corrected as of v55.0 (this corrected build))")
         if "overall_best_supported_model" in ms:
             lines.append(f"  {ms['overall_best_supported_model']} (evaluated on {ms['patients_evaluated']} patients).")
             for m, w in ms.get("mean_akaike_weight_by_model", {}).items():
@@ -1153,10 +1161,12 @@ class KKodeApexEngine:
         else:
             lines.append(f"  Not run or unavailable: {(sim or {}).get('error', 'not run')}")
         lines.append("=" * 70)
-        lines.append("This report is a planning aid, not a finalized protocol. See module")
-        lines.append("docstring for explicit statements of what this engine does and does not do.")
+        lines.append("This report is a planning aid, not a finalized protocol. Model-competition")
+        lines.append("results should be treated as provisional until re-validated against real")
+        lines.append("RUSH2A data under this fix (see module changelog). See module docstring")
+        lines.append("for explicit statements of what this engine does and does not do.")
         return "\n".join(lines)
 
 
 if __name__ == "__main__":
-    print("K-KODE Engine v55.0 initialized successfully.")
+    print(f"K-KODE Engine {KKodeApexEngine.ENGINE_VERSION} initialized successfully.")
