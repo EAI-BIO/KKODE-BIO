@@ -87,9 +87,11 @@ KEY CAPABILITIES:
    not structural EZ measurements, be the PRIMARY efficacy outcome - EZ
    area is mainly an enrollment criterion. A tool that only understands
    EZ width is modeling the field's secondary endpoint.
-SOURCE: Maguire MG, Birch DG, et al. (REDI Working Group / Foundation
-   for Clinical Trials in USH2A-Related Retinal Degeneration." Transl
-   Vis Sci Technol. https://tvst.arvojournals.org/article.aspx?articleid=2802114
+   SOURCE: Maguire MG, Birch DG, et al. (REDI Working Group / Foundation
+   Fighting Blindness Clinical Consortium). "Endpoints and Design for
+   Clinical Trials in USH2A-Related Retinal Degeneration." Transl Vis Sci
+   Technol. 2024; 13(10):15. DOI: 10.1167/tvst.13.10.15
+   https://tvst.arvojournals.org/article.aspx?articleid=2802114
 2. PROPER CENSORED-DATA HANDLING (Tobit-style MLE), not floor-and-drop.
    SOURCE: Tobin J (1958). "Estimation of Relationships for Limited
    Dependent Variables." Econometrica, 26(1), 24-36.
