@@ -59,21 +59,16 @@ Censored (floor-hitting) observations contribute a CDF term, not a
 density, and correctly required no Jacobian correction in either version
 -- only the uncensored/density terms were affected.
 
-IMPORTANT CAVEAT THIS FIX DOES NOT RESOLVE: this fix has been validated
-against SYNTHETIC data with a known, planted ground truth (see audit
-report). It has NOT yet been re-run against the real RUSH2A dataset used
-for the original validation report shared with Craig Hasilo / Dr. Miguel
-Burnier. That report's headline finding -- "K-KODE independently
-identified Square-Root, matching the published literature" -- was
-produced by the BUGGED v55.0 competition logic, which we now know was
-predisposed toward selecting Square-Root regardless of the true
-underlying pattern. It is very possible the real RUSH2A data still
-supports Square-Root once correctly re-analyzed (the population decay
-RATE estimates from that report are unaffected by this bug either way,
-per above) -- but that must be confirmed by re-running v55.0 (this corrected build) against the
-actual RUSH2A CSV before that specific claim is repeated to Dr. Burnier
-or anyone else. This is flagged again at the bottom of this changelog and
-in the audit report's final section.
+IMPORTANT CAVEAT (UPDATED): this fix was first validated on SYNTHETIC
+data with a known, planted ground truth (see audit report). The original
+internal validation report's headline finding -- "K-KODE independently
+identified Square-Root" -- was produced by the bugged competition logic,
+which was predisposed toward Square-Root regardless of the true pattern.
+A subsequent re-run of this corrected build on the public RUSH2A EZ-area
+data (Sept 2026) found no single functional form clearly preferred (mean
+Akaike weights within a narrow band), so the earlier Square-Root headline
+is retired. Population decay-rate estimates for a single, given model are
+unaffected by this bug.
 
 No other functional changes from v55.0 in this revision -- all other
 capabilities (censored MLE per-patient fitting, standard and Bayesian
@@ -92,7 +87,7 @@ KEY CAPABILITIES:
    not structural EZ measurements, be the PRIMARY efficacy outcome - EZ
    area is mainly an enrollment criterion. A tool that only understands
    EZ width is modeling the field's secondary endpoint.
-   SOURCE: Birch DG, et al. (RUSH2A Study Group). "Endpoints and Design
+SOURCE: Maguire MG, Birch DG, et al. (REDI Working Group / Foundation
    for Clinical Trials in USH2A-Related Retinal Degeneration." Transl
    Vis Sci Technol. https://tvst.arvojournals.org/article.aspx?articleid=2802114
 2. PROPER CENSORED-DATA HANDLING (Tobit-style MLE), not floor-and-drop.
