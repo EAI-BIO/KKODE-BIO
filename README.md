@@ -4,6 +4,8 @@ Censored-data biostatistics for rare-disease clinical trial planning. K-KODE tur
 
 EAI-BIO · Elite Architecture Intelligence Inc. · Research Use Only (RUO) · Apache 2.0
 
+Evidence to date: 44 automated tests on synthetic cohorts with planted ground truth, and one end-to-end run on the real RUSH2A natural-history dataset (EZ area: 715 readings, 125 participants, 249 eyes). The real-data run kept every censored reading, agreed with an independent analysis, and exposed three weaknesses that were fixed and tested. See Validation status for exactly what that does and does not show.
+
 Start here
 If you are...	Read this first
 A patient, family member or funder	In plain language, then Questions people ask
@@ -27,7 +29,7 @@ What K-KODE does. You give it a spreadsheet of patient measurements over time. I
 
 What it will not do. It does not diagnose, treat, or predict what will happen to an individual patient. It is a planning aid for researchers and statisticians. It does not replace a biostatistician, and it refuses to give an answer when the data cannot support one, for example when a group of patients is improving or not changing.
 
-How much to trust it. The methods are standard and published. The code is open for anyone to inspect, and it ships with an automated test suite. Validation so far uses computer-generated patient data where the true answer is known in advance, and the engine recovers it. It has not yet been validated on real patient data, and it is Research Use Only: it is not an approved medical device and must not be used to make clinical decisions.
+How much to trust it. The methods are standard and published. The code is open for anyone to inspect, and it ships with an automated test suite. It has been tested two ways. First, on computer-generated patient data where the true answer is known in advance, where the engine recovers it. Second, it has been run end to end on real patient data from the RUSH2A natural-history study (EZ area from 125 participants), where it kept the measurements that hit the instrument's limit, agreed with a separate statistical analysis, and revealed three weaknesses that were then fixed. That real-data run is an engineering check, not a clinical validation, and it has not yet been independently reviewed. K-KODE is Research Use Only: it is not an approved medical device and must not be used to make clinical decisions.
 
 For clinicians and trial teams
 
@@ -101,7 +103,7 @@ Questions people ask
 
 Is this a medical device or a diagnostic tool? No. It is research software for planning studies. It is Research Use Only and has no regulatory approval.
 
-Has it been tested on real patients? Only exploratorily. It has been tested on computer-generated cohorts where the true answer is known, and the test suite is published with the code. It has also been run once end to end on a real natural-history dataset, which found and fixed three weaknesses; those real-data results are unreviewed and not reported here. Independent validation is the next step.
+Has it been tested on real patients? Yes, on real research data, but as an engineering check and not a clinical validation. It has been run end to end on the RUSH2A natural-history dataset (EZ area, 125 participants), which found and fixed three weaknesses. It has also been tested on computer-generated cohorts where the true answer is known, and that test suite is published with the code. The real-data results are unreviewed and are not reported here. Independent review is the next step.
 
 Why does it keep readings other tools discard? A reading at the instrument's limit still says something: the disease progressed at least that far. Discarding it makes fast progressors vanish and the disease look slower than it is.
 
@@ -170,7 +172,7 @@ What this version deliberately does not claim to do
 Does not ingest raw OCT images or perform retinal layer segmentation. It assumes a reading center or imaging pipeline has already produced a numeric measurement per visit.
 The standard (statsmodels) mixed model still excludes censored rows. Use the censored population model or the Bayesian model for heavy censoring.
 Not FDA-qualified or validated as a Drug Development Tool. Research Use Only.
-Not validated on real data in this release (see Validation status).
+The real-data run on RUSH2A is an exploratory engineering check, not a clinical validation, and its results are unreviewed (see Validation status).
 Known limitations
 Eye structure is approximate. In the censored population model both eyes share the patient's random effects; the Bayesian model treats each eye as an independent unit (this is flagged in its output).
 Model discrimination has limits. At higher noise, Square-Root and Log-Exponential are the pair most often confused (see Validation status).
@@ -271,11 +273,11 @@ The source of the RUSH2A data is the Foundation Fighting Blindness Clinical Cons
 We publish this status plainly because trust in a trial-planning tool has to be earned in the open. If you are a biostatistician, clinician, or researcher and find something wrong, please open an issue or reach out directly. Corrections are welcome and will be fixed promptly.
 
 Roadmap
-Re-run the full validation on the current build with real data, and publish the audit trail.
+Independent review of the exploratory RUSH2A run, and publication of the audit trail once the data use agreement terms are confirmed.
 Extend validation to functional endpoints: static perimetry and microperimetry sensitivity.
 Sensitivity-dependent measurement noise and an informative-dropout sensitivity analysis.
 Spline or fractional-polynomial decay as a fifth competing form.
-Covariate-adjusted and prognostic-enrichment sample sizing. Early exploratory analysis suggests baseline severity explains a meaningful share of between-patient variation in progression.
+Covariate-adjusted and prognostic-enrichment sample sizing.
 Independent replication on a second dataset, and independent biostatistician review.
 Planned: machine-learning-assisted multi-endpoint progression forecasting with calibrated uncertainty, and cross-cohort data harmonization.
 Wire plateau-aware floor detection into the automatic cleaning pipeline.
