@@ -1,7 +1,6 @@
-ode engine · PY
 """
-Regression + planted-truth tests for kkode_engine.py (v55.0, audit-4 build).
- 
+Regression + planted-truth tests for kkode_engine.py (v55.0, audit-6 build).
+
 Run:  python test_kkode_engine.py
 Every test generates synthetic data with a KNOWN ground truth, so a pass means
 the engine recovers what was planted, not just that it runs.
@@ -11,18 +10,18 @@ import traceback
 import warnings
 import numpy as np
 import pandas as pd
- 
+
 warnings.filterwarnings("ignore")
 import logging
 import kkode_engine as ke
 from kkode_engine import KKodeApexEngine, fit_censored_model
- 
+
 ke.logger.setLevel(logging.WARNING)
- 
+
 VISITS_YEARS = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0]
 BASE = pd.Timestamp("2020-01-01")
- 
- 
+
+
 def make_cohort(n_patients=30, two_eyes=True, form="Linear", noise=0.03,
                 seed=0, slope_sd=0.0, patient_sd=0.0, floor=0.05):
     """Synthetic cohort with a planted functional form.
@@ -54,12 +53,12 @@ def make_cohort(n_patients=30, two_eyes=True, form="Linear", noise=0.03,
                     "ez": float(yi),
                 })
     return pd.DataFrame(rows)
- 
- 
+
+
 def engine(df, eye=True, floor=0.05):
     return KKodeApexEngine(df, "ez", eye_column="eye" if eye else None, measurement_floor=floor)
- 
- 
+
+
 # ----------------------------------------------------------------------
 # Audit 1 regression: Jacobian correction removes the Square-Root bias
 # ----------------------------------------------------------------------
@@ -70,32 +69,32 @@ def test_planted_linear_not_called_squareroot():
     wf = ms["win_fraction_by_model"]
     assert wf["Linear"] > wf["Square-Root"], f"Linear should beat Square-Root, got {wf}"
     assert wf["Square-Root"] < 0.6, f"Square-Root should not dominate, got {wf}"
- 
- 
+
+
 def test_planted_logexp_recovered():
     e = engine(make_cohort(form="Log-Exponential", noise=0.02, seed=2))
     e.clean_and_transform()
     ms = e.run_model_competition()
     w = ms["mean_akaike_weight_by_model"]
     assert ms["overall_best_supported_model"] == "Log-Exponential", f"weights {w}"
- 
- 
+
+
 def test_planted_squareroot_recovered():
     e = engine(make_cohort(form="Square-Root", noise=0.02, seed=3))
     e.clean_and_transform()
     ms = e.run_model_competition()
     w = ms["mean_akaike_weight_by_model"]
     assert ms["overall_best_supported_model"] == "Square-Root", f"weights {w}"
- 
- 
+
+
 def test_planted_powerlaw_recovered():
     e = engine(make_cohort(form="Power-Law", noise=0.01, seed=4))
     e.clean_and_transform()
     ms = e.run_model_competition()
     w = ms["mean_akaike_weight_by_model"]
     assert ms["overall_best_supported_model"] == "Power-Law", f"weights {w}"
- 
- 
+
+
 # ----------------------------------------------------------------------
 # Audit 2, item 1: censored zero readings must not disqualify models
 # ----------------------------------------------------------------------
@@ -107,16 +106,16 @@ def test_zero_reading_does_not_disqualify_transformed_models():
         assert f is not None, f"{m} was wrongly rejected because of a censored zero"
         assert f["n_censored"] >= 1
         assert np.isfinite(f["aicc"])
- 
- 
+
+
 def test_uncensored_nonpositive_is_still_rejected():
     t = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
     y = np.array([5.0, 4.0, -1.0, 3.0, 2.0])  # negative reading is not a floor hit
     # negative <= floor, so it IS censored by definition; verify no crash and sane output
     f = fit_censored_model(t, y, 0.05, "Log-Exponential")
     assert f is None or np.isfinite(f["aicc"])
- 
- 
+
+
 def test_zeros_in_cohort_all_four_models_compete():
     df = make_cohort(n_patients=15, form="Linear", noise=0.05, seed=5)
     # force a floor-hit zero at the last visit of every eye
@@ -127,8 +126,8 @@ def test_zeros_in_cohort_all_four_models_compete():
     ms = e.run_model_competition()
     assert ms["patients_with_fewer_than_four_models_fit"] == 0, ms
     assert all(v > 0 for v in ms["win_fraction_by_model"].values()) or True  # all models were eligible
- 
- 
+
+
 # ----------------------------------------------------------------------
 # Audit 2, item 2: Power-Law decay rate + sample size no longer crash
 # ----------------------------------------------------------------------
@@ -141,8 +140,8 @@ def test_powerlaw_decay_rate_present_and_sample_size_works():
     cf = e.compute_closed_form_sample_size(n_bootstrap=200)
     assert "error" not in cf, cf
     assert cf["required_n_per_arm"] and cf["required_n_per_arm"] > 0
- 
- 
+
+
 # ----------------------------------------------------------------------
 # Audit 2, item 5: eyes are not counted as independent patients
 # ----------------------------------------------------------------------
@@ -155,8 +154,8 @@ def test_closed_form_counts_patients_not_eyes():
     assert cf["cohort_size_used"] == n_pat, cf
     cf_eye = e.compute_closed_form_sample_size(n_bootstrap=200, unit="eye")
     assert cf_eye["cohort_size_used"] == 2 * n_pat, cf_eye
- 
- 
+
+
 def test_closed_form_sensible_vs_theory():
     """With a planted slope mean m and between-patient SD s, the formula
     n = 2 (z_a + z_b)^2 s^2 / (m * eff)^2 should be near the theoretical value."""
@@ -171,8 +170,8 @@ def test_closed_form_sensible_vs_theory():
     z = stats.norm.ppf(0.975) + stats.norm.ppf(0.80)
     n_theory = 2 * z ** 2 * s_true ** 2 / (m_true * 0.30) ** 2
     assert abs(cf["required_n_per_arm"] - n_theory) / n_theory < 0.20, (cf["required_n_per_arm"], n_theory)
- 
- 
+
+
 def test_nested_mixed_effects_runs_and_counts_patients():
     n_pat = 20
     e = engine(make_cohort(n_patients=n_pat, form="Linear", noise=0.05, seed=9,
@@ -183,8 +182,8 @@ def test_nested_mixed_effects_runs_and_counts_patients():
     assert r["total_patients_modeled"] == n_pat
     # slope recovery: planted population decay rate is 1.2 units/yr
     assert abs(r["population_mean_decay_rate"] - 1.2) < 0.15, r["population_mean_decay_rate"]
- 
- 
+
+
 # ----------------------------------------------------------------------
 # Audit 2, items 3-4, 6: Power-Law consistency in simulation; real tau_int
 # ----------------------------------------------------------------------
@@ -203,15 +202,15 @@ def test_simulation_runs_linear_and_uses_fitted_intercept_sd():
     sim = e.compute_simulated_sample_size(n_sims_per_candidate=60, source="standard_nlme")
     assert "error" not in sim, sim
     assert sim["required_n_per_arm"] >= 3
- 
- 
+
+
 def test_simulation_predictor_matches_model():
     p_lin = ke._prepare_predictor("Linear", np.array([0.0, 1.0, 2.0]))
     p_pow = ke._prepare_predictor("Power-Law", np.array([0.0, 1.0, 2.0]))
     assert np.allclose(p_lin, [0.0, 1.0, 2.0])
     assert np.allclose(p_pow, np.log(np.array([0.0, 1.0, 2.0]) + ke.POWER_LAW_TIME_OFFSET_YEARS))
- 
- 
+
+
 # ----------------------------------------------------------------------
 # Minor items
 # ----------------------------------------------------------------------
@@ -224,8 +223,8 @@ def test_non_declining_cohort_gives_clear_error():
     e.run_per_patient_decay(model="Linear")
     cf = e.compute_closed_form_sample_size(n_bootstrap=100)
     assert "error" in cf and "not positive" in cf["error"], cf
- 
- 
+
+
 def test_report_footer_matches_changelog():
     e = engine(make_cohort(n_patients=15, form="Linear", noise=0.05, seed=13))
     e.clean_and_transform()
@@ -238,8 +237,8 @@ def test_report_footer_matches_changelog():
     assert "Independent clinical/biostatistical review is still outstanding" in rep
     assert "jacobian" in rep.lower() or "Jacobian" in rep
     assert "synthetic data with planted truth" in rep
- 
- 
+
+
 def test_same_single_model_estimates_unaffected_by_jacobian():
     """Parameter estimates for a single model must be identical with and
     without the Jacobian term (it is constant in the parameters)."""
@@ -254,8 +253,8 @@ def test_same_single_model_estimates_unaffected_by_jacobian():
     res = minimize(ke._neg_log_likelihood, x0, args=(t, g_y, is_c, np.log(0.05), None),
                    method="Nelder-Mead", options={"xatol": 1e-9, "fatol": 1e-9, "maxiter": 4000})
     assert abs(res.x[1] - f["slope"]) < 1e-4, (res.x[1], f["slope"])
- 
- 
+
+
 # ----------------------------------------------------------------------
 # Audit 3 regressions
 # ----------------------------------------------------------------------
@@ -272,8 +271,8 @@ def test_jacobian_densities_integrate_to_one():
         lo = 1e-6 if model != "Linear" else -20
         area = integrate.quad(f, lo, hi, limit=400)[0]
         assert abs(area - 1) < 0.01, (model, area)
- 
- 
+
+
 def test_log_models_inadmissible_with_nonpositive_floor_and_censored_rows():
     t = np.array(VISITS_YEARS)
     y = np.array([8.0, 6.5, 5.0, 3.2, 1.5, 0.0, 0.0])
@@ -284,8 +283,8 @@ def test_log_models_inadmissible_with_nonpositive_floor_and_censored_rows():
     assert fit_censored_model(t, y, 0.05, "Log-Exponential") is not None  # positive floor: fine
     y_ok = np.array([8.0, 6.5, 5.0, 3.2, 1.5, 1.0, 0.8])  # nothing censored
     assert fit_censored_model(t, y_ok, 0.0, "Log-Exponential") is not None
- 
- 
+
+
 def test_censored_term_is_not_clipped():
     """A censored row far in the model's tail must be penalised by its true
     log-probability (< log 1e-12 = -27.6), not by a clipped constant."""
@@ -294,8 +293,8 @@ def test_censored_term_is_not_clipped():
     nll = ke._neg_log_likelihood(np.array([3.0, -0.1, np.log(0.05)]), x, g_y, is_c, 0.0, None)
     unc = -np.sum(__import__("scipy").stats.norm.logpdf(g_y[:2] - np.array([3.0, 2.9]), 0, 0.05))
     assert (nll - unc) > 27.7, nll - unc
- 
- 
+
+
 def test_time_zero_is_shared_between_eyes():
     df = make_cohort(n_patients=3, form="Linear", noise=0.01, seed=1)
     df = df[~((df.eye == "OS") & (df.visit_date == df.visit_date.min()))]  # OS lacks baseline
@@ -304,28 +303,28 @@ def test_time_zero_is_shared_between_eyes():
     for d, grp in p.groupby("visit_date"):
         assert grp["years_from_baseline"].nunique() == 1, (d, grp["years_from_baseline"].tolist())
     assert abs(p["years_from_baseline"].min()) < 1e-9
- 
- 
+
+
 def test_competition_reports_patients_not_just_eyes():
     e = engine(make_cohort(n_patients=10, form="Linear", noise=0.05, seed=2))
     e.clean_and_transform(); ms = e.run_model_competition()
     assert ms["patients_represented"] == 10 and ms["patients_evaluated"] == 20, ms
     assert "from 10 patients" in e.generate_report()
- 
- 
+
+
 def test_no_unverified_validation_claims():
     e = engine(make_cohort(n_patients=12, form="Linear", noise=0.05, seed=3))
     e.clean_and_transform(); e.run_model_competition()
     rep = e.generate_report()
-    assert "public RUSH2A" not in rep and "pending" in rep
+    assert "public RUSH2A" not in rep and "unreviewed" in rep
     src = open(ke.__file__).read()
     assert "(Sept 2026) found no single functional form" not in src
     assert "initial run on the public RUSH2A" not in src
     assert "RUSH2A was re-run" not in src
-    assert "audit-5" in src
- 
- 
- 
+    assert "audit-6" in src
+
+
+
 # ----------------------------------------------------------------------
 # Audit 4: ceiling censoring + censored population model
 # ----------------------------------------------------------------------
@@ -345,8 +344,8 @@ def make_native_cohort(n=80, b0=34.0, b1=-6.0, sa=4.0, sb=1.5, rho=-0.3, se=2.0,
                 rows.append({"patient_id": f"P{p}", "eye": eye,
                              "visit_date": BASE + pd.Timedelta(days=int(round(t * 365.25))), "v": float(y)})
     return pd.DataFrame(rows)
- 
- 
+
+
 def test_censored_and_density_mass_sum_to_one_with_floor_and_ceiling():
     """P(Y<=floor) + integral of the Jacobian-corrected density over (floor,ceiling)
     + P(Y>=ceiling) must equal 1 on every model scale (proves bounds and Jacobian
@@ -364,8 +363,8 @@ def test_censored_and_density_mass_sum_to_one_with_floor_and_ceiling():
                                 + ke._log_jacobian_dgdy(model, ya)[0]))
         mid = integrate.quad(dens, floor, ceil, limit=400)[0]
         assert abs(low + mid + up - 1) < 1e-3, (model, low, mid, up)
- 
- 
+
+
 def test_ceiling_fit_beats_ignoring_the_ceiling():
     t = np.arange(0, 5.01, 0.5)
     rng = np.random.default_rng(21)
@@ -378,16 +377,16 @@ def test_ceiling_fit_beats_ignoring_the_ceiling():
             tobit.append(-f["slope"]); naive.append(-g["slope"])
     assert abs(np.mean(tobit) - 4.0) < 0.25, np.mean(tobit)
     assert abs(np.mean(naive) - 4.0) > abs(np.mean(tobit) - 4.0) + 0.1, (np.mean(naive), np.mean(tobit))
- 
- 
+
+
 def test_no_ceiling_matches_unreachable_ceiling():
     t = np.array(VISITS_YEARS); rng = np.random.default_rng(3)
     y = 9.0 - 1.1 * t + rng.normal(0, 0.1, len(t))
     a = fit_censored_model(t, y, 0.05, "Linear")
     b = fit_censored_model(t, y, 0.05, "Linear", ceiling_value=1e9)
     assert abs(a["slope"] - b["slope"]) < 1e-6 and abs(a["aicc"] - b["aicc"]) < 1e-6
- 
- 
+
+
 def test_ceiling_must_exceed_floor():
     t = np.array(VISITS_YEARS)
     y = np.linspace(9, 3, len(t))
@@ -402,8 +401,8 @@ def test_ceiling_must_exceed_floor():
     except ValueError:
         return
     raise AssertionError("expected ValueError from engine")
- 
- 
+
+
 def test_engine_counts_and_competes_with_ceiling():
     df = make_native_cohort(n=30, b0=34.0, b1=-3.0, seed=4)
     e = KKodeApexEngine(df, "v", eye_column="eye", measurement_floor=0.0, measurement_ceiling=36.0)
@@ -418,8 +417,8 @@ def test_engine_counts_and_competes_with_ceiling():
     e.fit_mixed_effects_nlme(model="Linear")
     expect = int(((df.v > 0.0) & (df.v < 36.0)).sum())
     assert e.mixed_effects_results["total_observations"] == expect
- 
- 
+
+
 def test_population_model_recovers_planted_truth_and_se_is_calibrated():
     df = make_native_cohort(n=80, b0=34.0, b1=-6.0, sa=4.0, sb=1.5, se=2.0, seed=1)
     e = KKodeApexEngine(df, "v", eye_column="eye", measurement_floor=0.0, measurement_ceiling=36.0)
@@ -434,8 +433,8 @@ def test_population_model_recovers_planted_truth_and_se_is_calibrated():
     # SE should be near slope_sd/sqrt(patients) = 1.5/sqrt(80) ~ 0.17, not near zero
     assert 0.08 < r["population_mean_decay_rate_se"] < 0.35, r["population_mean_decay_rate_se"]
     assert all(np.isfinite(v) for v in r["population_mean_decay_rate_95ci"])
- 
- 
+
+
 def test_population_model_less_biased_than_dropping_censored_rows():
     tobit_err, drop_err = [], []
     for seed in (10, 11, 12):
@@ -447,8 +446,8 @@ def test_population_model_less_biased_than_dropping_censored_rows():
         tobit_err.append(r["population_mean_decay_rate"] - 5.0)
         drop_err.append(m["population_mean_decay_rate"] - 5.0)
     assert abs(np.mean(tobit_err)) < abs(np.mean(drop_err)), (tobit_err, drop_err)
- 
- 
+
+
 def test_population_model_speed():
     import time
     df = make_native_cohort(n=125, seed=5)
@@ -456,16 +455,16 @@ def test_population_model_speed():
     e.clean_and_transform()
     t0 = time.time(); r = e.fit_censored_population_model("Linear"); dt = time.time() - t0
     assert r["converged"] and dt < 60, dt   # RUSH2A-sized cohort (125 patients)
- 
- 
+
+
 def test_population_model_aic_prefers_true_form_after_jacobian():
     df = make_cohort(n_patients=40, form="Log-Exponential", noise=0.05, seed=8, slope_sd=0.2, patient_sd=1.0)
     e = engine(df); e.clean_and_transform()
     aic = {m: e.fit_censored_population_model(m)["aic_jacobian_corrected"]
            for m in ("Linear", "Log-Exponential")}
     assert aic["Log-Exponential"] < aic["Linear"], aic
- 
- 
+
+
 def test_simulation_can_use_censored_mle_source():
     df = make_native_cohort(n=40, b0=34.0, b1=-6.0, seed=6)
     e = KKodeApexEngine(df, "v", eye_column="eye", measurement_floor=0.0, measurement_ceiling=36.0)
@@ -473,8 +472,8 @@ def test_simulation_can_use_censored_mle_source():
     sim = e.compute_simulated_sample_size(n_sims_per_candidate=60, source="censored_mle")
     assert sim.get("population_parameter_source") == "censored_mle", sim
     assert sim["required_n_per_arm"] >= 3
- 
- 
+
+
 def test_population_model_reports_clear_errors():
     df = make_cohort(n_patients=15, form="Linear", noise=0.05, seed=9)
     e = engine(df, floor=0.0); e.clean_and_transform()
@@ -482,9 +481,9 @@ def test_population_model_reports_clear_errors():
     e2 = engine(df2, floor=0.0); e2.clean_and_transform()
     r = e2.fit_censored_population_model("Log-Exponential")
     assert "error" in r and "inadmissible" in r["error"], r
- 
- 
- 
+
+
+
 # ----------------------------------------------------------------------
 # Audit 5 regressions: degenerate inputs must be refused, not answered
 # ----------------------------------------------------------------------
@@ -494,29 +493,29 @@ def test_improving_cohort_refused_by_simulation_too():
     e = engine(df); e.run_full_analysis(n_sims_per_candidate=30, auto_run_bayesian_if_heavily_censored=False)
     assert "error" in e.sample_size_closed_form
     assert "error" in e.sample_size_simulated and "not declining" in e.sample_size_simulated["error"], e.sample_size_simulated
- 
- 
+
+
 def test_flat_cohort_refused_not_one_per_arm():
     base = make_cohort(n_patients=12, form="Linear", noise=0.05, seed=1)
     e = engine(base.assign(ez=5.0)); e.clean_and_transform(); e.run_per_patient_decay(model="Linear")
     cf = e.compute_closed_form_sample_size(n_bootstrap=50)
     assert "error" in cf and "required_n_per_arm" not in cf, cf
- 
- 
+
+
 def test_exact_duplicate_rows_dropped_and_reported():
     base = make_cohort(n_patients=12, form="Linear", noise=0.05, seed=1)
     e = engine(pd.concat([base, base.iloc[:20]])); e.clean_and_transform()
     dq = e.data_quality_report
     assert dq["exact_duplicate_rows_dropped"] == 20 and dq["rows_retained_for_modeling"] == len(base), dq
- 
- 
+
+
 def test_same_date_different_value_is_warned_even_with_eye_column():
     base = make_cohort(n_patients=12, form="Linear", noise=0.05, seed=1)
     dup = base.iloc[:6].copy(); dup["ez"] = dup["ez"] + 0.5
     e = engine(pd.concat([base, dup])); e.clean_and_transform()
     assert "duplicate_same_date_warning" in e.data_quality_report
- 
- 
+
+
 def test_tiny_n_is_flagged_and_realistic_data_is_not():
     base = make_cohort(n_patients=12, form="Linear", noise=0.05, seed=1)
     e = engine(base); e.clean_and_transform(); e.run_per_patient_decay(model="Linear")
@@ -527,9 +526,9 @@ def test_tiny_n_is_flagged_and_realistic_data_is_not():
     cf2 = e2.compute_closed_form_sample_size(n_bootstrap=50)
     assert not [k for k in cf2 if k.endswith("warning")], cf2
     assert cf2["p_value_mean_decay_differs_from_zero"] < 0.001
- 
- 
- 
+
+
+
 def test_per_eye_slope_interval_coverage_is_near_nominal():
     """Planted truth, 7 visits/eye: the reported 95% slope interval must cover
     the true slope close to 95% of the time (the old 1.96*SE interval: ~82%)."""
@@ -542,11 +541,82 @@ def test_per_eye_slope_interval_coverage_is_near_nominal():
             n += 1
             covered += f["slope_ci95"][0] <= -1.2 <= f["slope_ci95"][1]
     assert 0.90 <= covered / n <= 0.99, covered / n
- 
- 
+
+
+# ----------------------------------------------------------------------
+# Audit 6 regressions (found by the first RUSH2A run): form selection,
+# sample-size disagreement warning, and interval fallback
+# ----------------------------------------------------------------------
+def test_profile_ci_matches_known_quadratic():
+    # nll is quadratic in b (theta[1]) with sd 0.2, so the 95% interval is b +/- 1.96*0.2
+    def nll(th):
+        return 0.5 * ((th[1] - 1.0) / 0.2) ** 2 + 0.5 * float(np.sum(np.delete(th, 1) ** 2))
+    x_hat = np.array([0.0, 1.0, 0.0, 0.0, 0.0, 0.0])
+    bounds = [(None, None)] * 6
+    lo, hi = KKodeApexEngine._profile_ci_slope(nll, x_hat, bounds, nll(x_hat))
+    # rate = -b, so interval is [-1.392, -0.608] (1.92 = chi2(1, .95)/2 gives 1.9600*0.2)
+    assert abs(lo - (-1.392)) < 0.01 and abs(hi - (-0.608)) < 0.01, (lo, hi)
+
+
+def test_population_model_always_returns_an_interval_when_converged():
+    df = make_cohort(n_patients=40, form="Log-Exponential", noise=0.05, seed=8, slope_sd=0.0, patient_sd=1.0)
+    e = engine(df); e.clean_and_transform()
+    r = e.fit_censored_population_model("Log-Exponential")
+    assert r["converged"] and r["population_mean_decay_rate_95ci"] is not None, r
+    lo, hi = r["population_mean_decay_rate_95ci"]
+    assert lo < r["population_mean_decay_rate"] < hi and r["ci_method"] in ("Wald", "profile likelihood"), r
+
+
+def test_sample_size_disagreement_is_flagged_and_agreement_is_not():
+    df = make_cohort(n_patients=12, form="Linear", noise=0.05, seed=1)
+    e = engine(df)
+    e.sample_size_closed_form = {"required_n_per_arm": 100}
+    e.sample_size_simulated = {"required_n_per_arm": 350}
+    e._flag_sample_size_disagreement()
+    assert "sample_size_disagreement_warning" in e.sample_size_closed_form
+    assert "sample_size_disagreement_warning" in e.sample_size_simulated
+    e.sample_size_closed_form = {"required_n_per_arm": 100}
+    e.sample_size_simulated = {"required_n_per_arm": 150}
+    e._flag_sample_size_disagreement()
+    assert "sample_size_disagreement_warning" not in e.sample_size_closed_form
+
+
+def test_cohort_level_selection_used_when_per_eye_evidence_is_weak():
+    # Few visits per eye (as in real natural-history data), strong between-patient spread:
+    # per-eye weights are near-tied, but the cohort-level fit still identifies the form.
+    rng = np.random.default_rng(21)
+    rows = []
+    for p in range(70):
+        a = rng.normal(2.0, 0.9); b = 0.30 + rng.normal(0, 0.05)
+        for eye in ("OD", "OS"):
+            for ti in (0.0, 1.0, 2.1, 4.0)[: rng.integers(2, 5)]:
+                y = float(np.exp(a + rng.normal(0, 0.15) - b * ti) * np.exp(rng.normal(0, 0.12)))
+                rows.append({"patient_id": f"P{p:03d}", "eye": eye,
+                             "visit_date": BASE + pd.Timedelta(days=int(round(ti * 365.25))), "ez": y})
+    df = pd.DataFrame(rows)
+    e = engine(df)
+    res = e.run_full_analysis(n_sims_per_candidate=30, auto_run_bayesian_if_heavily_censored=False)
+    fs = res["form_selection"]
+    assert fs["selected"] == res["primary_model_used"]
+    if fs["per_eye_evidence_weak"]:
+        assert fs["basis"].startswith("cohort-level") and fs["selected"] in ("Log-Exponential", "Power-Law", "Square-Root"), fs
+        # the selected form must have the lowest population AIC among those fitted
+        aics = fs["population_aic_by_model"]
+        assert aics[fs["selected"]] == min(aics.values()), aics
+        assert aics["Log-Exponential"] < aics["Linear"], aics
+    assert "FORM USED DOWNSTREAM" in e.generate_report() or not fs["per_eye_evidence_weak"]
+
+
+def test_report_says_rush2a_run_is_unreviewed_not_pending():
+    df = make_cohort(n_patients=12, form="Linear", noise=0.05, seed=1)
+    e = engine(df); e.run_full_analysis(n_sims_per_candidate=20, auto_run_bayesian_if_heavily_censored=False)
+    rep = e.generate_report()
+    assert "re-run" not in rep.lower() and "unreviewed" in rep, rep[-500:]
+
+
 # ----------------------------------------------------------------------
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
- 
+
 if __name__ == "__main__":
     failed = 0
     for fn in TESTS:
@@ -559,4 +629,3 @@ if __name__ == "__main__":
             traceback.print_exc()
     print(f"\n{len(TESTS) - failed}/{len(TESTS)} passed")
     sys.exit(1 if failed else 0)
- 
