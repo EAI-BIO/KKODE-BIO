@@ -130,8 +130,10 @@ internal validation report's headline finding -- "K-KODE independently
 identified Square-Root" -- was produced by the bugged competition logic,
 which was predisposed toward Square-Root regardless of the true pattern.
 The earlier Square-Root headline is therefore RETIRED. A re-run of this
-corrected build on the RUSH2A data has NOT yet been done in this repo;
-until it is, no functional-form conclusion on real data should be quoted.
+corrected build was later run once, exploratorily, on the RUSH2A EZ-area
+data (see Audit 6). That run is unreviewed, and per-eye evidence on that
+data was near-tied, so no functional-form conclusion on real data should be
+quoted.
 Population decay-rate estimates for a single, given model are unaffected
 by the Jacobian bug.
  
@@ -165,6 +167,22 @@ closed-form sample size gave 76-87% true power against an 80% target; the
 simulated sample size is conservative (95-97% true power) because its
 default 4-visit schedule is sparser than the data and patient-level slope
 variance absorbs eye-level variance.
+ 
+AUDIT 6 (found by the first exploratory run on RUSH2A EZ-area data, 715
+readings, 125 patients, 249 eyes, most eyes with only 1-5 visits): (a) per-eye
+Akaike weights were near-tied, so the pipeline fell back to Linear even though
+the cohort-level censored population AIC strongly disfavoured it; the engine
+now compares all four forms by the Jacobian-corrected population AIC when
+per-eye evidence is weak (top-two mean weight gap < 0.15) and reports both;
+(b) closed-form and simulated sample sizes differed 12-fold with no warning;
+a warning is now attached whenever they differ by more than 2x; (c) the
+censored population model returned no interval when its Hessian was singular;
+it now falls back to a profile-likelihood interval for the mean slope.
+CALIBRATION OF (a) (synthetic, 3 seeds per form): at low noise the cohort-level
+rule named the planted Square-Root and Log-Exponential forms 3/3 each; at
+higher noise it confused neighbouring forms (Square-Root -> Linear,
+Log-Exponential -> Square-Root). Read the selected form as "how curved", not
+as a literal mechanism. RUSH2A findings are exploratory and unreviewed.
  
 ============================================================================
 ORIGINAL v55.0 DOCUMENTATION (retained below)
@@ -552,7 +570,7 @@ class KKodeApexEngine:
     """
     REQUIRED_BASE_COLUMNS = ['patient_id', 'visit_date']
     ENGINE_VERSION = "v55.0"
-    BUILD_TAG = "jacobian-fix + audit-5"
+    BUILD_TAG = "jacobian-fix + audit-6"
  
     def __init__(self, data_source: Union[str, pd.DataFrame], endpoint_column: str,
                  eye_column: Optional[str] = None, measurement_floor: float = 0.05,
@@ -585,6 +603,7 @@ class KKodeApexEngine:
         self.mixed_effects_results: Dict[str, Any] = {}
         self.sample_size_closed_form: Dict[str, Any] = {}
         self.sample_size_simulated: Dict[str, Any] = {}
+        self.form_selection: Dict[str, Any] = {}
         self.bayesian_censored_nlme_results: Dict[str, Any] = {}
         self.censored_population_results: Dict[str, Any] = {}
  
@@ -1221,6 +1240,40 @@ class KKodeApexEngine:
             )
         return self.sample_size_simulated
  
+    @staticmethod
+    def _profile_ci_slope(nll, x_hat, bounds, nll_min, crit=1.92, max_expand=12):
+        """95% profile-likelihood interval for the mean decay rate (-b).
+        Returns None if either end cannot be bracketed. Slower than a Wald
+        interval, but valid when the Hessian is singular."""
+        from scipy.optimize import brentq
+        idx = [i for i in range(len(x_hat)) if i != 1]
+        def prof(b_fixed):
+            def f(r):
+                th = np.empty(len(x_hat)); th[1] = b_fixed; th[idx] = r
+                return nll(th)
+            sub_bounds = [bounds[i] for i in idx]
+            r = minimize(f, x_hat[idx], method="L-BFGS-B", bounds=sub_bounds)
+            return float(r.fun)
+        b_hat = float(x_hat[1])
+        step = max(abs(b_hat) * 0.25, 1e-3)
+        ends = []
+        try:
+            for direction in (-1.0, 1.0):
+                lo, hi = b_hat, None
+                for k_ in range(max_expand):
+                    cand = b_hat + direction * step * (2 ** k_)
+                    if prof(cand) - nll_min > crit:
+                        hi = cand
+                        break
+                    lo = cand
+                if hi is None:
+                    return None
+                ends.append(brentq(lambda v: prof(v) - nll_min - crit, min(lo, hi), max(lo, hi), xtol=1e-4))
+        except Exception:
+            return None
+        b_lo, b_hi = sorted(ends)
+        return [float(-b_hi), float(-b_lo)]   # rate = -b
+ 
     def fit_censored_population_model(self, model: str = "Log-Exponential", n_quad: int = 9) -> Dict[str, Any]:
         """Frequentist censored (Tobit) mixed model on the chosen model scale.
  
@@ -1377,8 +1430,13 @@ class KKodeApexEngine:
             self.censored_population_results = {"error": f"Optimization failed: {e}"}
             return self.censored_population_results
         a, b, ls, lta, ltb, ar = res.x
-        # Wald SEs from a finite-difference Hessian of the NLL
+        # Wald SE from a finite-difference Hessian of the NLL. It is used only if
+        # the Hessian is positive definite (a genuine interior optimum). Otherwise
+        # (e.g. a variance component sitting near zero makes the Hessian singular)
+        # the interval for the mean slope comes from a profile likelihood instead.
         se = None
+        ci_method = None
+        ci = None
         try:
             n_p = len(res.x); H = np.zeros((n_p, n_p)); h = 1e-3
             f0 = nll(res.x)
@@ -1392,11 +1450,18 @@ class KKodeApexEngine:
                         for si, sj in ((1, 1), (1, -1), (-1, 1), (-1, -1)):
                             q = res.x.copy(); q[i] += si * h; q[j] += sj * h; v.append(nll(q))
                         H[i, j] = H[j, i] = (v[0] - v[1] - v[2] + v[3]) / (4 * h ** 2)
-            cov = np.linalg.inv(H)
-            if np.all(np.diag(cov) > 0):
-                se = np.sqrt(np.diag(cov))
+            if np.all(np.isfinite(H)) and np.all(np.linalg.eigvalsh((H + H.T) / 2) > 0):
+                cov = np.linalg.inv(H)
+                if cov[1, 1] > 0:
+                    se = np.sqrt(np.diag(cov))
+                    ci = [float(-b - 1.96 * se[1]), float(-b + 1.96 * se[1])]
+                    ci_method = "Wald"
         except Exception:
             se = None
+        if ci is None and res.success:
+            ci = self._profile_ci_slope(nll, res.x, bounds, res.fun)
+            if ci is not None:
+                ci_method = "profile likelihood"
         k = 6
         n_obs = int(len(y))
         aic = 2 * k + 2 * (res.fun - jac_sum)
@@ -1410,8 +1475,8 @@ class KKodeApexEngine:
             "population_intercept": float(a),
             "population_mean_decay_rate": float(-b),
             "population_mean_decay_rate_se": (float(se[1]) if se is not None else None),
-            "population_mean_decay_rate_95ci": ([float(-b - 1.96 * se[1]), float(-b + 1.96 * se[1])]
-                                                if se is not None else None),
+            "population_mean_decay_rate_95ci": ci,
+            "ci_method": ci_method,
             "residual_sd": float(np.exp(ls)),
             "between_patient_intercept_sd": float(np.exp(lta)),
             "between_patient_slope_sd": float(np.exp(ltb)),
@@ -1571,6 +1636,30 @@ class KKodeApexEngine:
         self.bayesian_censored_nlme_results = result
         return result
  
+    def select_form_by_population_fit(self) -> Dict[str, Any]:
+        """Cohort-level form selection. When per-eye Akaike weights are close
+        (few visits per eye give little power), compare the four forms with the
+        Jacobian-corrected AIC of the censored population model, which uses
+        every observation at once. Returns the selection record."""
+        if self.clean_df.empty:
+            self.clean_and_transform()
+        aics, notes = {}, {}
+        for m in ("Linear", "Square-Root", "Log-Exponential", "Power-Law"):
+            r = self.fit_censored_population_model(model=m)
+            if "aic_jacobian_corrected" in r and np.isfinite(r["aic_jacobian_corrected"]) and r.get("converged", False):
+                aics[m] = float(r["aic_jacobian_corrected"])
+            else:
+                notes[m] = r.get("error") or r.get("convergence_warning") or "did not converge"
+        if not aics:
+            return {"selected": None, "population_aic_by_model": {}, "not_fitted": notes}
+        best = min(aics, key=aics.get)
+        return {
+            "selected": best,
+            "population_aic_by_model": aics,
+            "delta_aic_by_model": {m: round(v - aics[best], 2) for m, v in aics.items()},
+            "not_fitted": notes,
+        }
+ 
     def run_full_analysis(self, target_power: float = 0.80, alpha: float = 0.05,
                            therapeutic_efficacy: float = 0.30, run_simulation: bool = True,
                            n_sims_per_candidate: int = 150,
@@ -1580,6 +1669,20 @@ class KKodeApexEngine:
         self.clean_and_transform()
         model_sel = self.run_model_competition()
         primary_model = model_sel.get("overall_best_supported_model", "Log-Exponential")
+        per_eye_choice = primary_model
+        top = sorted(model_sel.get("mean_akaike_weight_by_model", {}).values(), reverse=True)
+        per_eye_weak = (len(top) < 2) or ((top[0] - top[1]) < 0.15)
+        form_selection = {"per_eye_choice": per_eye_choice, "per_eye_evidence_weak": bool(per_eye_weak),
+                          "basis": "per-eye Akaike weights"}
+        if per_eye_weak:
+            pop_sel = self.select_form_by_population_fit()
+            form_selection.update(pop_sel)
+            if pop_sel.get("selected"):
+                primary_model = pop_sel["selected"]
+                form_selection["basis"] = ("cohort-level censored-population AIC "
+                                           "(per-eye weights were close)")
+        form_selection["selected"] = primary_model
+        self.form_selection = form_selection
         self.run_per_patient_decay(model=primary_model)
         self.fit_mixed_effects_nlme(model=primary_model)
         self.fit_censored_population_model(model=primary_model)
@@ -1589,6 +1692,7 @@ class KKodeApexEngine:
                 target_power, alpha, therapeutic_efficacy, n_sims_per_candidate=n_sims_per_candidate,
                 source="auto", correlated_random_effects=correlated_random_effects,
             )
+        self._flag_sample_size_disagreement()
         censoring_fraction = self.data_quality_report.get("total_censoring_fraction_of_raw_input", 0.0)
         need_bayesian_for_censoring = (
             auto_run_bayesian_if_heavily_censored and censoring_fraction > HEAVY_CENSORING_WARNING_FRACTION
@@ -1605,12 +1709,32 @@ class KKodeApexEngine:
             "data_quality_report": self.data_quality_report,
             "model_selection_results": self.model_selection_results,
             "primary_model_used": primary_model,
+            "form_selection": form_selection,
             "mixed_effects_results": self.mixed_effects_results,
             "bayesian_censored_nlme_results": bayesian_results,
             "censored_population_model_results": self.censored_population_results,
             "sample_size_closed_form": self.sample_size_closed_form,
             "sample_size_simulated": self.sample_size_simulated,
         }
+ 
+    def _flag_sample_size_disagreement(self, ratio_threshold: float = 2.0) -> None:
+        """Closed-form and simulated sample sizes should roughly agree. If they
+        differ by more than ratio_threshold, neither number should be quoted
+        without review, so a warning is attached to both results."""
+        cf, sim = self.sample_size_closed_form, self.sample_size_simulated
+        try:
+            a, b = cf.get("required_n_per_arm"), (sim or {}).get("required_n_per_arm")
+            if not a or not b:
+                return
+            ratio = max(a, b) / max(min(a, b), 1)
+            if ratio > ratio_threshold:
+                msg = (f"Closed-form ({a}) and simulated ({b}) sample sizes differ by {ratio:.1f}x. "
+                       "Treat both as unreliable until the model form, effect size and variance "
+                       "assumptions are reviewed by a biostatistician.")
+                cf["sample_size_disagreement_warning"] = msg
+                sim["sample_size_disagreement_warning"] = msg
+        except Exception:
+            pass
  
     def generate_report(self) -> str:
         """Generates plain-language executive summary."""
@@ -1648,6 +1772,11 @@ class KKodeApexEngine:
                 lines.append("  NOTE: weights are close; no single form is clearly preferred.")
         else:
             lines.append(f"  Not enough data to run model competition ({ms.get('error', 'unknown error')}).")
+        fs = getattr(self, "form_selection", None)
+        if fs and fs.get("per_eye_evidence_weak") and fs.get("population_aic_by_model"):
+            lines.append(f"  FORM USED DOWNSTREAM: {fs['selected']} (chosen from {fs['basis']}).")
+            lines.append("    Population AIC (Jacobian-corrected, lower is better): " +
+                         ", ".join(f"{m} {v:.1f}" for m, v in fs["population_aic_by_model"].items()))
         lines.append("")
         lines.append("POPULATION DECAY RATE")
         if "population_mean_decay_rate" in nlme:
@@ -1665,7 +1794,8 @@ class KKodeApexEngine:
             lines.append(
                 f"  {cpm['population_mean_decay_rate']:.4f} / year (Censored population model, "
                 f"{cpm['n_floor_censored']} floor + {cpm['n_ceiling_censored']} ceiling rows kept; "
-                f"95% CI: {[round(v, 4) for v in ci] if ci else 'unavailable'})."
+                f"95% CI: {[round(v, 4) for v in ci] if ci else 'unavailable'}"
+                f"{' via ' + cpm['ci_method'] if cpm.get('ci_method') else ''})."
             )
             if cpm.get("convergence_warning"):
                 lines.append(f"  NOTE: {cpm['convergence_warning']}")
@@ -1691,6 +1821,8 @@ class KKodeApexEngine:
                          f"(95% CI: {cf.get('bootstrap_95pct_ci_per_arm')})")
             if "provisional_estimate_warning" in cf:
                 lines.append(f"  NOTE: {cf['provisional_estimate_warning']}")
+            if "sample_size_disagreement_warning" in cf:
+                lines.append(f"  WARNING: {cf['sample_size_disagreement_warning']}")
         else:
             lines.append(f"  Unavailable: {cf.get('error', 'unknown error')}")
         lines.append("")
@@ -1710,7 +1842,8 @@ class KKodeApexEngine:
         lines.append("=" * 70)
         lines.append("This report is a planning aid, not a finalized protocol, and the engine is")
         lines.append("not FDA-qualified. Validation to date: synthetic data with planted truth.")
-        lines.append("A re-run of this build on RUSH2A (data-use-agreement data) is pending.")
+        lines.append("A first exploratory run on RUSH2A (data-use-agreement data) is done; its")
+        lines.append("findings are unreviewed.")
         lines.append("Independent clinical/biostatistical review is still outstanding. See the")
         lines.append("module docstring for what this engine does and does not do.")
         return "\n".join(lines)
