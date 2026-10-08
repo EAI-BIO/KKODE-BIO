@@ -100,10 +100,12 @@ Standard tools struggle with this in three ways:
 Rare-disease trials fight math that generic tools weren't built for:
 
 - Cohorts too small for standard statistics.
-- Biology that decays in curves, not straight lines.
-- Fast progressors who get silently dropped the moment a measurement crosses the instrument's floor.
+- Biology that decays in curves, not straight lines. Published work has found exponential decline to describe long-term ellipsoid zone loss better than linear or quadratic models in USH2A-retinopathy, where a log-scale endpoint needed 48% fewer patients for an identically powered one-year trial (38 vs 73) [11], and has modelled ellipsoid zone constriction as exponential in RPGR-related retinitis pigmentosa [12]. The RUSH2A endpoint analyses estimated rates of change with mixed-effects linear models [1].
+- Fast progressors who get silently dropped, or flattened, the moment a measurement crosses the instrument's floor. In Stargardt microperimetry, accounting for the floor effect detected a faster rate of decline than analyses that ignored it [9], and in glaucoma visual fields censored models showed the smallest bias in the rate of progression [10].
 
 K-KODE was built for these problems, first for USH2A retinal degeneration. It packages established, peer-reviewed methods (censored maximum likelihood, information-criterion model competition, mixed-effects and hierarchical Bayesian modeling, Monte Carlo trial simulation) into one auditable pipeline that runs on a raw CSV. Nothing here is a novel statistical claim. The contribution is putting the right methods together, exposing every assumption, and reporting uncertainty honestly.
+
+**Related work.** Censoring for floor effects and hierarchical models of progression are not new in ophthalmology: hierarchical censored Bayesian models have been applied to visual field progression [10], and floor-censored analyses to Stargardt microperimetry [9]. K-KODE builds on that line of work. What it adds is a packaged, open and tested pipeline aimed at inherited retinal degeneration trial planning: censoring combined with per-eye competition between four decay shapes, population-level estimation, and patient-level sample sizing in one place. Structure-function relationships in USH2A-retinopathy, which a future joint model would draw on, have been characterised in RUSH2A data [13]. None of these papers is affiliated with this project, and this list is not an exhaustive review of the literature.
 
 ## What sets it apart
 
@@ -129,6 +131,7 @@ flowchart LR
     F --> G[Simulation check of the trial]
     G --> H[Plain report with uncertainty]
 ```
+
 
 | Stage | Method | Why it matters |
 |---|---|---|
@@ -189,17 +192,17 @@ K-KODE is a rigorously sourced engineering effort to give the USH2A research com
 ### 1. Generalized endpoint support
 Not hardcoded to one measurement. Any longitudinal numeric endpoint (EZ width, EZ area, static perimetry sensitivity, microperimetry sensitivity) passes in via `endpoint_column=`. This matters because the RUSH2A investigators prioritize functional measures (for example, rate of change of static-perimetry mean sensitivity) over structural ones, and report that a baseline EZ area of at least 3 mm² is needed to detect structural change.
 
-*Source:* Maguire MG, Birch DG, et al., for the REDI Working Group / Foundation Fighting Blindness Clinical Consortium. "Endpoints and Design for Clinical Trials in USH2A-Related Retinal Degeneration: Results and Recommendations From the RUSH2A Natural History Study." *Translational Vision Science & Technology*. 2024; 13(10):15. DOI: 10.1167/tvst.13.10.15
+*Sources:* RUSH2A endpoints and design recommendations [1]; structure-function association in USH2A-retinopathy [13].
 
 ### 2. Proper censored-data handling (Tobit-style MLE), floor and ceiling
 Every candidate model is fit per eye by maximum likelihood with a censored Gaussian likelihood: points inside the measurement range contribute a normal density, points at or below the floor contribute the normal CDF, and (when `measurement_ceiling=` is given) points at or above the ceiling contribute the normal survival function. Both bounds are transformed onto each model's own scale, so the censored probability is identical across models. A censored point becomes real information instead of being discarded.
 
-*Source:* Tobin J. "Estimation of Relationships for Limited Dependent Variables." *Econometrica*. 1958; 26(1):24-36. DOI: 10.2307/1907382
+*Sources:* Tobin, 1958 [2]. Floor-effect censoring in ophthalmic progression analyses: [9, 10].
 
 ### 3. Four candidate functional forms, competed per eye
 Linear, Square-Root, Log-Exponential, and Power-Law curves are fit under the same censored likelihood. Small-sample-corrected AIC and Akaike weights rank the evidence. Because the forms are fit on different transformed scales of the endpoint, each likelihood includes the Jacobian term needed to compare them as likelihoods of the original measurement; this is verified numerically in the test suite (the density integrates to one on every scale). Log-scale forms are declared inadmissible, rather than scored arbitrarily, when the floor is zero or below and censored rows exist.
 
-*Sources:* Hurvich CM, Tsai CL. *Biometrika*. 1989; 76(2):297-307. DOI: 10.1093/biomet/76.2.297. Burnham KP, Anderson DR. *Model Selection and Multimodel Inference* (2nd ed). Springer; 2002.
+*Sources:* Hurvich and Tsai, 1989 [3]; Burnham and Anderson, 2002 [4]; Wagenmakers and Farrell, 2004 (Akaike weights) [18]. Published USH2A and RPGR analyses support exponential-type decline shapes [11, 12].
 
 ### 4. Standard errors, small-sample intervals and an identifiability guard
 Parameter uncertainty comes from a central finite-difference Hessian at the fitted optimum. Because each eye has few visits, per-eye slope intervals use a small-sample standard error and a t quantile (about 94-95% coverage of the true slope in planted-truth checks, versus about 82% for a plain 1.96 × SE interval). A fit with fewer than two uncensored points is not identified, so it is refused rather than allowed to produce an unbounded slope.
@@ -207,15 +210,17 @@ Parameter uncertainty comes from a central finite-difference Hessian at the fitt
 ### 5. Patient-level, simulation-validated sample size
 Sample size is computed per patient (eyes averaged), the unit a trial randomizes. Many two-arm trials are then simulated under the fitted population parameters, empirically measuring power at candidate sample sizes rather than relying only on a closed-form formula's assumptions. Warnings are raised when the cohort is small, the mean decline is not distinguishable from zero, or the required n is implausibly small.
 
-*Source:* Burton A, Altman DG, Royston P, Holder RL. "The Design of Simulation Studies in Medical Statistics." *Statistics in Medicine*. 2006; 25(24):4279-4292. DOI: 10.1002/sim.2673
+*Sources:* Burton et al., 2006 (design of simulation studies) [5]; Liu and Liang, 1997 (sample size for correlated observations) [19].
 
 ### 6. Censored population model (fast, frequentist)
 `fit_censored_population_model()` fits a censored mixed model with correlated patient-level random intercept and slope, integrated out with adaptive Gauss-Hermite quadrature. It keeps floor- and ceiling-censored rows, returns Wald intervals, and gives a Jacobian-corrected AIC comparable across model forms. Both eyes of a patient share that patient's random effects. With `model="Linear"` it is a native-scale Tobit cross-check.
 
+*Sources:* Censored mixed-effects models were developed in other fields, notably HIV viral load and pharmacokinetics: Hughes, 1999 [14]; Jacqmin-Gadda et al., 2000 [16]; Beal, 2001, who compared handling below-quantification-limit observations as censored versus discarding them [15]. Adaptive Gauss-Hermite quadrature: Pinheiro and Bates, 1995 [17]. Related ophthalmic application: Montesano et al., 2021 [10].
+
 ### 7. Hierarchical Bayesian censored NLME (PyMC)
 A full population-level MCMC sampler (NUTS) using `pm.Censored` estimates population decay and between-patient variance from every observation, including censored points, with optional LKJ-Cholesky correlated random effects.
 
-*Sources:* Laird NM, Ware JH. *Biometrics*. 1982; 38(4):963-974. DOI: 10.2307/2529876. Lewandowski D, Kurowicka D, Joe H. *Journal of Multivariate Analysis*. 2009; 100(9):1989-2001. DOI: 10.1016/j.jmva.2009.04.008. Implementation: PyMC, https://www.pymc.io/
+*Sources:* Laird and Ware, 1982 [6]; Lewandowski, Kurowicka and Joe, 2009 (LKJ correlation prior) [7]. Implementation: PyMC [8]. A related hierarchical censored Bayesian model for visual field progression: [10].
 
 ### 8. Automatic population-parameter selection
 For the sample-size simulation, population parameters come from the censored population model when any rows are censored (the standard model drops them), otherwise from the standard mixed-effects model, with the Bayesian model as a further fallback. A borderline Bayesian fit retries with more MCMC effort without loosening the convergence bar.
@@ -295,8 +300,8 @@ The suite (44 tests) uses synthetic cohorts with planted ground truth. A passing
 
 ## Methodology & references
 
-<details>
-<summary><b>Click to expand the references</b></summary>
+<details open>
+<summary><b>References</b></summary>
 
 1. Maguire MG, Birch DG, Duncan JL, et al., for the REDI Working Group and the Foundation Fighting Blindness Clinical Consortium Investigator Group. "Endpoints and Design for Clinical Trials in USH2A-Related Retinal Degeneration: Results and Recommendations From the RUSH2A Natural History Study." *Translational Vision Science & Technology*. 2024; 13(10):15. DOI: 10.1167/tvst.13.10.15
 2. Tobin J. "Estimation of Relationships for Limited Dependent Variables." *Econometrica*. 1958; 26(1):24-36. DOI: 10.2307/1907382
@@ -306,6 +311,27 @@ The suite (44 tests) uses synthetic cohorts with planted ground truth. A passing
 6. Laird NM, Ware JH. "Random-Effects Models for Longitudinal Data." *Biometrics*. 1982; 38(4):963-974. DOI: 10.2307/2529876
 7. Lewandowski D, Kurowicka D, Joe H. "Generating Random Correlation Matrices Based on Vines and Extended Onion Method." *Journal of Multivariate Analysis*. 2009; 100(9):1989-2001. DOI: 10.1016/j.jmva.2009.04.008
 8. PyMC Development Team. *PyMC: Probabilistic Programming in Python*. https://www.pymc.io/
+
+**Clinical and ophthalmic literature** (cited in [The problem](#the-problem))
+
+9. Charng J, Thompson JA, Heath Jeffery RC, Kalantary A, Lamey TM, McLaren TL, Chen FK. "Censoring the Floor Effect in Long-Term Stargardt Disease Microperimetry Data Produces a Faster Rate of Decline." *Ophthalmology Science*. 2024; 4(6):100581. DOI: 10.1016/j.xops.2024.100581. https://pmc.ncbi.nlm.nih.gov/articles/PMC11401193/
+10. Montesano G, Garway-Heath DF, Ometto G, Crabb DP. "Hierarchical Censored Bayesian Analysis of Visual Field Progression." *Translational Vision Science & Technology*. 2021; 10(12):4. DOI: 10.1167/tvst.10.12.4
+11. Heyang M, Warren JL, Ocieczek P, Duncan JL, Moosajee M, Del Priore LV, Shen LL. "Long-term natural history of ellipsoid zone width in USH2A-retinopathy." *British Journal of Ophthalmology*. 2025; 109(3):383-390. DOI: 10.1136/bjo-2024-325323. https://pmc.ncbi.nlm.nih.gov/articles/PMC11866300
+12. Huang Y-H, et al. "The Exponential Constriction Model of the Ellipsoid Zone in Taiwanese Individuals With RPGR-Related X-Linked Retinitis Pigmentosa." *Investigative Ophthalmology & Visual Science*. 2025; 66(4):59. DOI: 10.1167/iovs.66.4.59. https://pmc.ncbi.nlm.nih.gov/articles/PMC12020949
+13. Vincent A, Liang W, Maguire MG, et al. "Natural History of Microperimetry and Optical Coherence Tomography in USH2A-Retinopathy: A Structure-Function Association Study." *American Journal of Ophthalmology*. 2025; 276:336-349. DOI: 10.1016/j.ajo.2025.04.034
+
+**Censored mixed-effects models, quadrature, model weights and sample size**
+
+14. Hughes JP. "Mixed effects models with censored data with application to HIV RNA levels." *Biometrics*. 1999; 55:625-629.
+15. Beal SL. "Ways to Fit a PK Model with Some Data Below the Quantification Limit." *Journal of Pharmacokinetics and Pharmacodynamics*. 2001; 28(5):481-504. DOI: 10.1023/A:1012299115260
+16. Jacqmin-Gadda H, Thiébaut R, Chêne G, Commenges D. "Analysis of left-censored longitudinal data with application to viral load in HIV infection." *Biostatistics*. 2000; 1:355-368.
+17. Pinheiro JC, Bates DM. "Approximations to the Log-Likelihood Function in the Nonlinear Mixed-Effects Model." *Journal of Computational and Graphical Statistics*. 1995. DOI: 10.1080/10618600.1995.10474663
+18. Wagenmakers E-J, Farrell S. "AIC model selection using Akaike weights." *Psychonomic Bulletin & Review*. 2004; 11(1):192-196. DOI: 10.3758/BF03206482
+19. Liu G, Liang KY. "Sample Size Calculations for Studies with Correlated Observations." *Biometrics*. 1997; 53(3):937-947.
+
+Reference 1 (RUSH2A) is also available at https://pmc.ncbi.nlm.nih.gov/articles/PMC11469320/
+
+*The authors of this project are not affiliated with the authors of the cited papers. Citation does not imply endorsement of K-KODE.*
 
 </details>
 
@@ -381,3 +407,5 @@ With gratitude to the USH2A research and patient community.
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE) for full terms.
+
+The current version is open source under Apache 2.0. Future enterprise features will be developed in a separate private repository.
