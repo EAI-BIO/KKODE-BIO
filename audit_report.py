@@ -1,4 +1,4 @@
-udit report · PY
+
 """
 audit_report.py -- optional helper that writes a Markdown summary from numbers you pass in.
  
