@@ -1,5 +1,5 @@
 """
-Regression + planted-truth tests for kkode_engine.py (v55.0, audit-6 build).
+Regression + planted-truth tests for kkode_engine.py (v55.0, audit-7 build).
 
 Run:  python test_kkode_engine.py
 Every test generates synthetic data with a KNOWN ground truth, so a pass means
@@ -321,7 +321,7 @@ def test_no_unverified_validation_claims():
     assert "(Sept 2026) found no single functional form" not in src
     assert "initial run on the public RUSH2A" not in src
     assert "RUSH2A was re-run" not in src
-    assert "audit-6" in src
+    assert "audit-7" in src and KKodeApexEngine.BUILD_TAG.endswith("audit-7")
 
 
 
@@ -612,6 +612,268 @@ def test_report_says_rush2a_run_is_unreviewed_not_pending():
     e = engine(df); e.run_full_analysis(n_sims_per_candidate=20, auto_run_bayesian_if_heavily_censored=False)
     rep = e.generate_report()
     assert "re-run" not in rep.lower() and "unreviewed" in rep, rep[-500:]
+
+
+# ----------------------------------------------------------------------
+# Audit 7: data preparation (text-censored readings, ID and eye labels,
+# plausibility checks, ambiguous dates, plateau-floor check)
+# ----------------------------------------------------------------------
+def _expect_value_error(fn):
+    try:
+        fn()
+    except ValueError:
+        return
+    raise AssertionError("expected ValueError")
+
+
+def test_text_censored_values_are_kept_as_censored_not_dropped():
+    num = make_cohort(n_patients=12, form="Linear", noise=0.02, seed=21)
+    last = num.groupby(["patient_id", "eye"]).tail(1).index[:10]
+    num.loc[last, "ez"] = 0.05
+    txt = num.copy()
+    txt["ez"] = txt["ez"].astype(object)
+    txt.loc[last, "ez"] = "<0.05"
+    a = engine(num); a.clean_and_transform()
+    b = engine(txt); b.clean_and_transform()
+    dq = b.data_quality_report
+    assert dq["rows_text_censored_at_floor"] == 10 and dq["rows_dropped_non_numeric_endpoint"] == 0, dq
+    assert dq["rows_at_or_below_measurement_floor"] == a.data_quality_report["rows_at_or_below_measurement_floor"] == 10
+    assert dq["rows_retained_for_modeling"] == a.data_quality_report["rows_retained_for_modeling"]
+    np.testing.assert_allclose(a.clean_df["ez"].to_numpy(float), b.clean_df["ez"].to_numpy(float))
+    ra = a.run_per_patient_decay(model="Linear"); rb = b.run_per_patient_decay(model="Linear")
+    for gid, fit in ra.items():
+        if "decay_rate" in fit:
+            assert np.isclose(fit["decay_rate"], rb[gid]["decay_rate"]), gid
+
+
+def test_text_limit_above_floor_is_dropped_and_reported_not_silently_censored():
+    df = make_cohort(n_patients=6, form="Linear", noise=0.02, seed=22)
+    df["ez"] = df["ez"].astype(object)
+    df.loc[3, "ez"] = "<0.5"
+    e = engine(df); e.clean_and_transform()
+    dq = e.data_quality_report
+    assert dq["rows_dropped_text_censored_limit_above_floor"] == 1, dq
+    assert dq["rows_dropped_non_numeric_endpoint"] == 0 and len(e.clean_df) == len(df) - 1
+    assert any("<x" in n and "0.5" in n for n in dq["data_prep_notes"]), dq["data_prep_notes"]
+    e2 = KKodeApexEngine(df, "ez", eye_column="eye", measurement_floor=0.5); e2.clean_and_transform()
+    assert e2.data_quality_report["rows_text_censored_at_floor"] == 1
+    assert e2.data_quality_report["rows_dropped_text_censored_limit_above_floor"] == 0
+
+
+def test_text_ceiling_values_need_a_ceiling():
+    df = make_cohort(n_patients=6, form="Linear", noise=0.02, seed=23)
+    df["ez"] = df["ez"].astype(object)
+    df.loc[2, "ez"] = ">36"
+    e = KKodeApexEngine(df, "ez", eye_column="eye", measurement_floor=0.05, measurement_ceiling=36.0)
+    e.clean_and_transform()
+    assert e.data_quality_report["rows_text_censored_at_ceiling"] == 1
+    assert e.data_quality_report["rows_at_or_above_measurement_ceiling"] == 1
+    e0 = engine(df); e0.clean_and_transform()
+    assert e0.data_quality_report["rows_dropped_text_censored_limit_below_ceiling"] == 1
+    assert e0.data_quality_report["rows_at_or_above_measurement_ceiling"] == 0
+
+
+def test_text_censor_spellings_are_recognised_and_junk_is_not():
+    for spelling in ["<0.05", "< 0.05", "<=0.05", "≤ 0.05", "<.05", "  <0.05  ", "<5e-2", "<0"]:
+        df = make_cohort(n_patients=4, form="Linear", noise=0.02, seed=24)
+        df["ez"] = df["ez"].astype(object)
+        df.loc[1, "ez"] = spelling
+        e = engine(df); e.clean_and_transform()
+        assert e.data_quality_report["rows_text_censored_at_floor"] == 1, spelling
+    for junk in ["<abc", "<", "N/A", "n.d."]:
+        df = make_cohort(n_patients=4, form="Linear", noise=0.02, seed=24)
+        df["ez"] = df["ez"].astype(object)
+        df.loc[1, "ez"] = junk
+        e = engine(df); e.clean_and_transform()
+        assert e.data_quality_report["rows_text_censored_at_floor"] == 0, junk
+        assert e.data_quality_report["rows_dropped_non_numeric_endpoint"] == 1, junk
+
+
+def test_patient_ids_and_eye_labels_are_harmonized():
+    base = make_cohort(n_patients=8, form="Linear", noise=0.02, seed=25)
+    tidy = engine(base); tidy.clean_and_transform()
+    messy = base.copy()
+    eye_variants = {"OD": ["OD", "od", "Right", "R", "right eye", "Droit"],
+                    "OS": ["OS", "Left", "l", "LE", "Œil gauche"]}
+    messy["eye"] = [eye_variants[e][i % len(eye_variants[e])] for i, e in enumerate(base["eye"])]
+    messy["patient_id"] = [[p, " " + p.lower(), p + " "][i % 3] for i, p in enumerate(base["patient_id"])]
+    m = engine(messy); m.clean_and_transform()
+    dq = m.data_quality_report
+    assert dq["n_patients"] == tidy.data_quality_report["n_patients"] == 8, dq
+    assert dq["n_modeling_units"] == tidy.data_quality_report["n_modeling_units"] == 16, dq
+    assert set(m.clean_df["eye"]) == {"OD", "OS"} and dq["eye_labels_unrecognized"] == []
+    assert dq["patient_ids_merged_by_normalization"] == 8 and dq["eye_labels_harmonized"]
+    assert len(m.clean_df) == len(tidy.clean_df)
+    # integer IDs read as floats must merge with their text form
+    ids = pd.DataFrame({
+        "patient_id": [101.0, "101", 101, 102.0, "102 ", 102],
+        "eye": ["OD"] * 6,
+        "visit_date": pd.to_datetime(["2020-01-01", "2020-07-01", "2021-01-01"] * 2),
+        "ez": [5.0, 4.0, 3.0, 5.0, 4.0, 3.0],
+    })
+    e = KKodeApexEngine(ids, "ez", eye_column="eye"); e.clean_and_transform()
+    assert e.data_quality_report["n_patients"] == 2 and set(e.clean_df["patient_id"]) == {"101", "102"}
+
+
+def test_unrecognized_eye_labels_kept_and_wrong_eye_column_reported():
+    df = make_cohort(n_patients=4, form="Linear", noise=0.02, seed=26)
+    df.loc[df["eye"] == "OS", "eye"] = "foveal"
+    e = engine(df); e.clean_and_transform()
+    dq = e.data_quality_report
+    assert dq["eye_labels_unrecognized"] == ["foveal"] and dq["n_modeling_units"] == 8, dq
+    wrong = KKodeApexEngine(make_cohort(n_patients=4, form="Linear", noise=0.02, seed=26), "ez",
+                            eye_column="Eye")
+    wrong.clean_and_transform()
+    assert any("not a column" in n for n in wrong.data_quality_report["data_prep_notes"])
+    assert wrong.data_quality_report["n_modeling_units"] == wrong.data_quality_report["n_patients"]
+
+
+def test_plausibility_checks_flag_but_only_drop_when_asked():
+    df = make_cohort(n_patients=12, form="Linear", noise=0.05, seed=27)
+    df.loc[0, "ez"] = -999.0
+    df.loc[1, "ez"] = np.inf
+    df.loc[2, "ez"] = 99999.0
+    e = engine(df); e.clean_and_transform()
+    dq = e.data_quality_report
+    assert dq["rows_dropped_non_finite_endpoint"] == 1, dq
+    assert dq["rows_negative_endpoint"] == 1 and dq["rows_extreme_outliers_flagged"] == 1, dq
+    assert dq["extreme_outlier_examples"][0]["value"] == 99999.0
+    assert len(e.clean_df) == len(df) - 1          # only the infinite row is gone
+    assert any("-999" in n for n in dq["data_prep_notes"])
+    e2 = KKodeApexEngine(df, "ez", eye_column="eye", plausible_min=0.0, plausible_max=1000.0)
+    e2.clean_and_transform()
+    d2 = e2.data_quality_report
+    assert d2["rows_dropped_outside_plausible_range"] == 2 and d2["rows_dropped_non_finite_endpoint"] == 1, d2
+    assert len(e2.clean_df) == len(df) - 3 and d2["rows_extreme_outliers_flagged"] == 0
+    _expect_value_error(lambda: KKodeApexEngine(df, "ez", plausible_min=5.0, plausible_max=1.0))
+
+
+def _two_visit_frame(d1, d2, n=3):
+    rows = []
+    for p in range(n):
+        for d, y in ((d1, 5.0), (d2, 4.0)):
+            rows.append({"patient_id": f"P{p}", "eye": "OD", "visit_date": d, "ez": y})
+    return pd.DataFrame(rows)
+
+
+def _span_years(e):
+    g = e.clean_df[e.clean_df["patient_id"] == "P0"].sort_values("visit_date")
+    return float(g["years_from_baseline"].iloc[-1])
+
+
+def test_dates_day_versus_month_order_is_inferred_or_warned_never_silent():
+    # a day above 12 in the first position settles it: day-first
+    e = engine(_two_visit_frame("13/02/2020", "13/08/2020")); e.clean_and_transform()
+    assert e.data_quality_report["date_interpretation"] == "day-first (inferred)"
+    assert abs(_span_years(e) - 182 / 365.25) < 0.01
+    # a day above 12 in the second position settles it: month-first
+    e = engine(_two_visit_frame("02/13/2020", "08/13/2020")); e.clean_and_transform()
+    assert e.data_quality_report["date_interpretation"] == "month-first (inferred)"
+    assert abs(_span_years(e) - 182 / 365.25) < 0.01
+    # genuinely ambiguous: month-first default, loudly
+    amb = _two_visit_frame("03/04/2020", "03/10/2020")
+    e = engine(amb); e.clean_and_transform()
+    dq = e.data_quality_report
+    assert dq["dates_ambiguous_rows"] == 6 and "default" in dq["date_interpretation"], dq
+    assert any("MONTH-FIRST" in n for n in dq["data_prep_notes"]), dq["data_prep_notes"]
+    assert abs(_span_years(e) - 6 / 365.25) < 0.01          # 4 Mar -> 10 Mar
+    # the caller can settle it, and then there is no warning
+    e = KKodeApexEngine(amb, "ez", eye_column="eye", dayfirst=True); e.clean_and_transform()
+    assert abs(_span_years(e) - 183 / 365.25) < 0.01        # 3 Apr -> 3 Oct
+    assert e.data_quality_report["data_prep_notes"] == []
+    e = KKodeApexEngine(amb, "ez", eye_column="eye", dayfirst=False); e.clean_and_transform()
+    assert abs(_span_years(e) - 6 / 365.25) < 0.01 and e.data_quality_report["data_prep_notes"] == []
+
+
+def test_iso_dates_are_never_flipped_by_dayfirst_and_mixed_formats_are_parsed():
+    iso = _two_visit_frame("2020-03-04", "2020-10-03")
+    e = KKodeApexEngine(iso, "ez", eye_column="eye", dayfirst=True); e.clean_and_transform()
+    assert abs(_span_years(e) - 213 / 365.25) < 0.01        # 4 Mar -> 3 Oct, not 3 Apr -> 10 Mar
+    mixed = _two_visit_frame("2020-03-04", "March 4, 2021")
+    e = engine(mixed); e.clean_and_transform()
+    assert len(e.clean_df) == len(mixed) and abs(_span_years(e) - 1.0) < 0.01
+    both = _two_visit_frame("13/02/2020", "02/13/2021")      # day-first and month-first in one column
+    e = engine(both); e.clean_and_transform()
+    assert e.data_quality_report["rows_dropped_unparseable_date"] == 0
+    assert any("mix conventions" in n for n in e.data_quality_report["data_prep_notes"])
+    bad = _two_visit_frame("2020-03-04", "not a date")
+    e = engine(bad); e.clean_and_transform()
+    assert e.data_quality_report["rows_dropped_unparseable_date"] == 3
+
+
+def _plateau_cohort(n=16, plateau=1.0, seed=0):
+    rng = np.random.default_rng(seed)
+    rows = []
+    for p in range(n):
+        for eye in ("OD", "OS"):
+            for t in VISITS_YEARS:
+                y = max(6.0 - 2.0 * t, plateau) + rng.normal(0, 0.002)
+                rows.append({"patient_id": f"P{p:03d}", "eye": eye,
+                             "visit_date": BASE + pd.Timedelta(days=int(round(t * 365.25))), "ez": y})
+    return pd.DataFrame(rows)
+
+
+def test_plateau_floor_is_checked_every_run_and_adopted_only_on_request():
+    df = _plateau_cohort()
+    e = engine(df); e.clean_and_transform()
+    chk = e.data_quality_report["plateau_floor_check"]
+    assert abs(chk["detected_plateau_floor"] - 1.0) < 0.05, chk
+    assert e.measurement_floor == 0.05 and chk["measurement_floor_in_use"] == 0.05
+    assert any("plateau" in n and "measurement_floor" in n for n in e.data_quality_report["data_prep_notes"])
+    assert e.data_quality_report["rows_at_or_below_measurement_floor"] == 0
+    a = KKodeApexEngine(df, "ez", eye_column="eye", auto_detect_floor=True); a.clean_and_transform()
+    assert abs(a.measurement_floor - 1.0) < 0.05 and a.data_quality_report["rows_at_or_below_measurement_floor"] > 0
+    assert a.data_quality_report["plateau_floor_check"]["measurement_floor_supplied"] == 0.05
+    floor_after_first = a.measurement_floor
+    a.clean_and_transform()                                   # a second pass must not drift
+    assert a.measurement_floor == floor_after_first
+    # a correctly supplied floor raises no complaint
+    ok = KKodeApexEngine(df, "ez", eye_column="eye", measurement_floor=1.0); ok.clean_and_transform()
+    assert not any("plateau" in n for n in ok.data_quality_report["data_prep_notes"]), ok.data_quality_report
+
+
+def test_clean_data_produces_no_spurious_data_notes():
+    for form in ("Linear", "Log-Exponential", "Square-Root", "Power-Law"):
+        e = engine(make_cohort(n_patients=15, form=form, noise=0.03, seed=7)); e.clean_and_transform()
+        notes = e.data_quality_report["data_prep_notes"]
+        if form == "Power-Law":
+            # a decline that keeps slowing can look like a floor; that advisory is the only one allowed
+            assert all("plateau" in n for n in notes), notes
+        else:
+            assert notes == [], (form, notes)
+        assert e.measurement_floor == 0.05 and e.data_quality_report["rows_extreme_outliers_flagged"] == 0
+
+
+def test_messy_file_gives_the_same_answer_as_the_tidy_file():
+    tidy = make_cohort(n_patients=15, form="Linear", noise=0.05, seed=31, slope_sd=0.15)
+    ends = tidy.groupby(["patient_id", "eye"]).tail(1).index[:8]
+    tidy.loc[ends, "ez"] = 0.05
+    messy = tidy.copy()
+    messy["ez"] = messy["ez"].astype(object)
+    messy.loc[ends, "ez"] = "<0.05"
+    variants = {"OD": ["OD", "right", "R"], "OS": ["OS", "Left", "l"]}
+    messy["eye"] = [variants[e][i % 3] for i, e in enumerate(tidy["eye"])]
+    messy["patient_id"] = [[p, p.lower(), " " + p][i % 3] for i, p in enumerate(tidy["patient_id"])]
+    # dd/mm/yyyy text: dates such as 31/12/2020 settle the order, so it is inferred, not guessed
+    messy["visit_date"] = messy["visit_date"].dt.strftime("%d/%m/%Y")
+    a = engine(tidy)
+    b = engine(messy)
+    forced = KKodeApexEngine(messy, "ez", eye_column="eye", dayfirst=True)
+    for e in (a, b, forced):
+        e.clean_and_transform(); e.run_per_patient_decay(model="Linear")
+    assert a.data_quality_report["n_modeling_units"] == b.data_quality_report["n_modeling_units"] == 30
+    assert b.data_quality_report["date_interpretation"] == "day-first (inferred)"
+    assert set(a.per_patient_fits) == set(b.per_patient_fits) == set(forced.per_patient_fits)
+    for gid, fit in a.per_patient_fits.items():
+        assert "decay_rate" in fit, gid
+        assert np.isclose(fit["decay_rate"], b.per_patient_fits[gid]["decay_rate"]), gid
+        assert np.isclose(fit["decay_rate"], forced.per_patient_fits[gid]["decay_rate"]), gid
+    ra = a.fit_mixed_effects_nlme(model="Linear"); rb = b.fit_mixed_effects_nlme(model="Linear")
+    assert np.isclose(ra["population_mean_decay_rate"], rb["population_mean_decay_rate"])
+    full = engine(messy)
+    full.run_full_analysis(run_simulation=False, auto_run_bayesian_if_heavily_censored=False)
+    rep = full.generate_report()
+    assert "DATA NOTE" in rep and "floor-censored" in rep and "validation" in rep.lower()
 
 
 # ----------------------------------------------------------------------
