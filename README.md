@@ -6,7 +6,7 @@
 
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
 ![Use](https://img.shields.io/badge/use-Research%20Use%20Only-orange)
-![Tests](https://img.shields.io/badge/tests-44%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-56%20passing-brightgreen)
 ![Validation](https://img.shields.io/badge/validation-synthetic%20%2B%20exploratory%20RUSH2A-informational)
 
 *Transparent, uncertainty-quantified progression estimates and trial sample sizes from raw longitudinal patient data.*
@@ -15,18 +15,18 @@
 
 </div>
 
-K-KODE turns raw longitudinal patient data into transparent, uncertainty-quantified progression estimates and trial sample sizes. Every method is established and cited, every assumption is exposed, every dropped row is counted, and every claim is backed by an automated test.
+K-KODE turns raw longitudinal patient data into transparent, uncertainty-quantified progression estimates and trial sample sizes. Every method is established and cited, every assumption is exposed, every dropped row is counted, and the engine's behaviour is covered by an automated test suite.
 
 > [!IMPORTANT]
 > **Research Use Only.** K-KODE is a trial-planning aid for researchers and statisticians. It is not an approved medical device and must not be used to make clinical decisions.
 
 ### At a glance
 
-| **4** | **3** | **44** | **1** |
+| **4** | **3** | **56** | **1** |
 |:---:|:---:|:---:|:---:|
 | competing curve shapes, chosen by evidence | cross-checking population estimates | automated tests with planted ground truth | end-to-end run on real RUSH2A data |
 
-**Evidence to date:** 44 automated tests on synthetic cohorts with planted ground truth, and one end-to-end run on the real RUSH2A natural-history dataset (EZ area: 715 readings, 125 participants, 249 eyes). The real-data run kept every censored reading, agreed with an independent analysis, and exposed three weaknesses that were fixed and tested. See [Validation status](#validation-status--integrity) for exactly what that does and does not show.
+**Evidence to date:** 56 automated tests on synthetic cohorts with planted ground truth, and one end-to-end run on the real RUSH2A natural-history dataset (EZ area: 715 readings, 125 participants, 249 eyes). The real-data run kept every censored reading, agreed with an independent analysis, and exposed three weaknesses that were fixed and tested. See [Validation status](#validation-status--integrity) for exactly what that does and does not show.
 
 ### Common practice versus K-KODE
 
@@ -135,7 +135,7 @@ flowchart LR
 
 | Stage | Method | Why it matters |
 |---|---|---|
-| Data cleaning | Automated audit of missing fields, bad dates, non-numeric values, exact duplicates, same-date repeats | Every dropped row is counted and reported |
+| Data cleaning | Automated audit of missing fields, bad dates, non-numeric values, exact duplicates and same-date repeats; text readings such as `<0.05` kept as censored; patient IDs and eye labels harmonized; implausible values and ambiguous dates flagged | Every dropped, changed or flagged row is counted and reported |
 | Per-eye decay fit | Censored (Tobit-style) MLE with floor and optional ceiling, across 4 competing functional forms, selected via AICc with a Jacobian correction | Eyes that cross a measurement bound stay in the model, and forms are compared on equal footing |
 | Population estimate | Standard mixed-effects NLME; censored (Tobit) mixed model with adaptive Gauss-Hermite integration; hierarchical Bayesian censored NLME (PyMC / NUTS) | Independent estimates that cross-check each other; two of the three keep censored rows |
 | Correlated random effects | Baseline severity and progression rate modeled jointly | Captures a biological relationship that independent-effects models can't represent |
@@ -190,7 +190,7 @@ K-KODE is a rigorously sourced engineering effort to give the USH2A research com
 ## Key capabilities
 
 ### 1. Generalized endpoint support
-Not hardcoded to one measurement. Any longitudinal numeric endpoint (EZ width, EZ area, static perimetry sensitivity, microperimetry sensitivity) passes in via `endpoint_column=`. This matters because the RUSH2A investigators prioritize functional measures (for example, rate of change of static-perimetry mean sensitivity) over structural ones, and report that a baseline EZ area of at least 3 mm² is needed to detect structural change.
+Not hardcoded to one measurement. Any longitudinal numeric endpoint (EZ width, EZ area, static perimetry sensitivity, microperimetry sensitivity) passes in via `endpoint_column=`. This matters because the RUSH2A investigators highlight functional measures (for example, rate of change of static-perimetry mean sensitivity) as sensitive endpoints, and report that a baseline EZ area of at least 3 mm² was necessary to detect change in EZ area.
 
 *Sources:* RUSH2A endpoints and design recommendations [1]; structure-function association in USH2A-retinopathy [13].
 
@@ -225,8 +225,14 @@ A full population-level MCMC sampler (NUTS) using `pm.Censored` estimates popula
 ### 8. Automatic population-parameter selection
 For the sample-size simulation, population parameters come from the censored population model when any rows are censored (the standard model drops them), otherwise from the standard mixed-effects model, with the Bayesian model as a further fallback. A borderline Bayesian fit retries with more MCMC effort without loosening the convergence bar.
 
-### 9. Plateau-aware floor detection (available, not yet auto-wired)
-A `_detect_plateau_floor()` helper distinguishes a genuine instrument floor from a single low reading. It is not yet called automatically; K-KODE takes an explicit `measurement_floor`.
+### 9. Data preparation you can audit
+Every cleaning pass reports what it dropped, changed and flagged (`data_quality_report`, printed as `DATA NOTE` lines in the report). Nothing is changed silently.
+
+- **Text-censored readings.** Values written as `<0.05`, `< 0.05`, `<=0.05` or `≤0.05` are kept and modeled as floor-censored when the limit is at or below `measurement_floor`; `>x` works the same way against `measurement_ceiling`. A limit that a single floor cannot represent (for example `<0.5` when the floor is 0.05) is dropped, counted and explained, never silently treated as the floor. Set `measurement_floor` to that limit if it is the instrument's true limit of detection.
+- **Patient IDs and eye labels.** IDs are matched ignoring case, spacing and a trailing `.0`. Eye labels such as `OD`, `R`, `Right`, `Right eye`, `Droit` and `OS`, `L`, `Left`, `Gauche` are mapped to OD and OS. Unrecognized labels are kept as separate eyes and listed, not guessed. A missing or misspelled `eye_column` is reported rather than silently pooling both eyes.
+- **Plausibility checks.** Infinite readings are dropped. Optional `plausible_min` / `plausible_max` drop impossible values. Negative readings (often `-1` or `-999` missing-value codes), extreme high outliers (over 10 times the cohort median and 8 robust standard deviations on the log scale) and future or pre-1900 dates are flagged for human review, never removed automatically.
+- **Ambiguous dates.** Year-first dates are always read unambiguously. For `03/04/2020`-style dates, day-first versus month-first is inferred when any date settles it (such as `31/12/2020`), can be forced with `dayfirst=True/False`, and produces a warning when it cannot be known (default: month-first).
+- **Plateau-aware floor check.** `_detect_plateau_floor()` runs on every cleaning pass and its result is compared with `measurement_floor`. A mismatch is reported; the floor is only replaced when you build the engine with `auto_detect_floor=True`. The check cannot tell a real instrument floor from a decline that is simply slowing, so treat it as advice.
 
 ## What this version deliberately does not claim to do
 
@@ -243,6 +249,7 @@ A `_detect_plateau_floor()` helper distinguishes a genuine instrument floor from
 - **Efficacy is proportional slowing on the fitted model's scale.** For transformed models that is not the same as a proportional reduction of the raw rate.
 - **Sparse natural-history data limit form selection.** When most eyes have only 1 to 5 visits, per-eye model weights are nearly tied. K-KODE then compares the four forms at the cohort level, which worked at low noise in synthetic tests (named the planted form 3/3) but confused neighbouring forms at higher noise. Read the selected form as "how curved the decline is", not as a biological mechanism.
 - **Sample sizes can disagree.** If the closed-form and simulated sample sizes differ by more than 2x, the report prints a warning and neither number should be quoted without statistical review.
+- **Data-preparation checks are heuristics.** They catch common export problems but cannot know your instrument. Day-first versus month-first can only be inferred when some date settles it. Flagged outliers, negative values and odd dates stay in the data until a person decides. The plateau check can mistake a slowing decline for a floor.
 - **Informative dropout is not modeled.** Patients who progress faster may leave studies earlier; this is on the roadmap.
 
 ## Installation
@@ -260,9 +267,9 @@ One row per visit, as a CSV or pandas DataFrame:
 | Column | Description |
 |---|---|
 | `patient_id` | Patient identifier |
-| `visit_date` | Visit date (any format `pandas.to_datetime` can parse) |
-| *(endpoint column)* | Numeric endpoint value; the column name is passed via `endpoint_column=` |
-| *(eye column, optional)* | Eye identifier (OD/OS); pass its name via `eye_column=` |
+| `visit_date` | Visit date. `YYYY-MM-DD` is always unambiguous; for `dd/mm/yyyy` or `mm/dd/yyyy` see "Ambiguous dates" above |
+| *(endpoint column)* | Numeric endpoint value (text such as `<0.05` is handled as a censored reading); the column name is passed via `endpoint_column=` |
+| *(eye column, optional)* | Eye identifier (OD/OS, or a common variant such as Right/Left); pass its name via `eye_column=` |
 
 Tracking both eyes? Always pass `eye_column=`. Otherwise both eyes on the same visit date are pooled into a single regression per patient, which biases the result. The data-quality report warns you if it detects same-date duplicates. Time zero is each patient's first visit, shared by both eyes.
 
@@ -277,6 +284,10 @@ engine = KKodeApexEngine(
     eye_column="eye",             # optional
     measurement_floor=0.05,       # instrument/assay floor for this endpoint
     measurement_ceiling=None,     # optional upper bound, e.g. 36 for dB endpoints
+    dayfirst=None,                # None infers dd/mm vs mm/dd and warns if unknowable; True/False forces it
+    plausible_min=None,           # optional physical limits; rows outside are dropped and counted
+    plausible_max=None,
+    auto_detect_floor=False,      # True adopts a plateau floor if one is detected; default only reports it
 )
 
 results = engine.run_full_analysis(
@@ -296,7 +307,7 @@ print(engine.generate_report())
 python test_kkode_engine.py
 ```
 
-The suite (44 tests) uses synthetic cohorts with planted ground truth. A passing run prints one PASS line per test and ends with `44/44 passed`; it takes several minutes because the population-model and simulation tests are the slow ones. The Bayesian model is smoke-tested separately and requires PyMC.
+The suite (56 tests) uses synthetic cohorts with planted ground truth. A passing run prints one PASS line per test and ends with `56/56 passed`; it takes several minutes because the population-model and simulation tests are the slow ones. The Bayesian model is smoke-tested separately and requires PyMC.
 
 ## Methodology & references
 
@@ -356,7 +367,7 @@ K-KODE is Research Use Only. Here is exactly where validation stands.
 
 **Completed**
 
-- **Ground-truth testing on synthetic cohorts** with known, planted parameters, backed by an automated test suite (44 tests). This testing exposed a model-selection bias (a missing Jacobian term in cross-model likelihood comparison), which was diagnosed, corrected and documented in the changelog at the top of `kkode_engine.py`. A later line-by-line audit found and fixed further issues, also documented there.
+- **Ground-truth testing on synthetic cohorts** with known, planted parameters, backed by an automated test suite (56 tests). This testing exposed a model-selection bias (a missing Jacobian term in cross-model likelihood comparison), which was diagnosed, corrected and documented in the changelog at the top of `kkode_engine.py`. A later line-by-line audit found and fixed further issues, also documented there.
 - **Measured behavior on synthetic data** (planted truth; settings are in the test suite and changelog):
   - Model competition named the true decay form in 32 of 32 cohorts at low noise and 23 of 32 at higher noise; Square-Root and Log-Exponential were the confusable pair.
   - The closed-form sample size delivered 76-87% true power against an 80% target.
@@ -385,7 +396,6 @@ We publish this status plainly because trust in a trial-planning tool has to be 
 5. Covariate-adjusted and prognostic-enrichment sample sizing.
 6. Independent replication on a second dataset, and independent biostatistician review.
 7. Planned: machine-learning-assisted multi-endpoint progression forecasting with calibrated uncertainty, and cross-cohort data harmonization.
-8. Wire plateau-aware floor detection into the automatic cleaning pipeline.
 
 ## Collaboration
 
@@ -398,7 +408,7 @@ eric@eaiinc.ca · github.com/EAI-BIO/KKODE-BIO
 
 K-KODE is personal, and I am on a mission to see it through.
 
-It is dedicated to my family and to all families living with inherited vision loss, and in honour of the blind woman I was able to help save from a house fire, an act for which I was awarded the National Assembly of Quebec's Médaille du député for bravery and bravery honours from the City of Pincourt.
+It is dedicated to my family and to all families living with inherited vision loss, and in honour of the blind woman I was able to help save from a house fire, an act for which I was awarded the National Assembly of Quebec's Médaille du député for bravery, and for which I was also honoured by the City of Pincourt.
 
 Every line of this project is built to help the research community find solutions as soon as possible.
 
