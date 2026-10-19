@@ -1,47 +1,97 @@
-import os
-import pandas as pd
-
-def generate_audit_report(results: dict, output_filename="KKODE_Protocol_Audit_Report.md") -> str:
+udit report · PY
+"""
+audit_report.py -- optional helper that writes a Markdown summary from numbers you pass in.
+ 
+This file is NOT used by the K-KODE engine, which prints its own report through
+KKodeApexEngine.generate_report(). It only formats a dictionary of results that
+YOU supply. It does not run any analysis and it checks nothing. Any value you do
+not supply is shown as "not supplied" rather than being filled in with a default.
+ 
+Research Use Only. Not an approved medical device. Not a clinical validation.
+"""
+ 
+ 
+def _show(value, fmt="{}", unit=""):
+    """Format a value for the report, or say plainly that it was not supplied."""
+    if value is None:
+        return "not supplied"
+    try:
+        text = fmt.format(value)
+    except (ValueError, TypeError):
+        text = str(value)
+    return f"{text} {unit}".rstrip()
+ 
+ 
+def _pct(value):
+    """Turn a fraction (0.8) into a percentage string (80%), or 'not supplied'."""
+    if value is None:
+        return "not supplied"
+    try:
+        return f"{float(value) * 100:.0f}%"
+    except (ValueError, TypeError):
+        return str(value)
+ 
+ 
+def generate_audit_report(results: dict, output_filename="KKODE_Audit_Summary.md") -> str:
     """
-    Generates a publication-grade Markdown audit report for biostatisticians
-    and IRB/Ethics review boards detailing model fits, floor censoring, and trial powering.
+    Writes a Markdown summary of results you pass in, and returns the file name.
+ 
+    Recognised keys (all optional): endpoint_name, data_source, power, alpha,
+    effect_size, n_naive, n_kkode, n_saved, n_patients, total_visits,
+    censored_visits, censored_pct, floor_value, winning_model, rate_kkode, unit,
+    n_sims.
     """
-    report_content = f"""# K-KODE BIOSTATISTICAL AUDIT REPORT
-**Engine Version:** v55.0 (Research Use Only)  
-**Endpoint Analyzed:** {results.get('endpoint_name', 'Static Perimetry Mean Sensitivity (dB)')}  
-**Calibration Standard:** RUSH2A Natural History Study Parameters (TVST/ARVO)  
-
+    r = results or {}
+    floor_text = _show(r.get("floor_value"))
+    censored = _show(r.get("censored_visits"))
+    if r.get("censored_pct") is not None:
+        censored = f"{censored} ({_show(r.get('censored_pct'), '{:.1f}')}%)"
+ 
+    report_content = f"""# K-KODE RESULTS SUMMARY
+**Engine:** K-KODE Engine (Research Use Only)
+**Endpoint analyzed:** {_show(r.get('endpoint_name'))}
+**Data source:** {_show(r.get('data_source'))}
+ 
+> This summary only formats the numbers that were passed in. It is a planning aid
+> for researchers and statisticians. The numbers shown are not a clinical
+> validation and have not been independently reviewed, and this summary must not
+> be used to make clinical decisions. See Section 4 for what has been tested.
+ 
 ---
-
-## 1. Executive Summary & Trial Powering
-- **Target Statistical Power ($1 - \\beta$):** {results.get('power', 0.80) * 100:.0f}%
-- **Significance Level ($\alpha$):** {results.get('alpha', 0.05)}
-- **Hypothesized Treatment Effect:** {results.get('effect_size', 0.30) * 100:.0f}% reduction in annual loss rate
-- **Naive Sample Size Requirement (Standard OLS):** **{results.get('n_naive', 'N/A')} patients / arm**
-- **K-KODE Sample Size Requirement (Tobit MLE):** **{results.get('n_kkode', 'N/A')} patients / arm**
-- **Sample Size Optimization Gain:** **{results.get('n_saved', 'N/A')} fewer patients required**
-
+ 
+## 1. Trial powering
+- **Target statistical power:** {_pct(r.get('power'))}
+- **Significance level (alpha):** {_show(r.get('alpha'))}
+- **Assumed treatment effect:** {_pct(r.get('effect_size'))} slowing of the decay rate
+- **Sample size, standard least-squares comparison:** {_show(r.get('n_naive'))} patients per arm
+- **Sample size, K-KODE censored model:** {_show(r.get('n_kkode'))} patients per arm
+- **Difference:** {_show(r.get('n_saved'))} fewer patients
+ 
 ---
-
-## 2. Cohort Floor-Censoring & Model Selection Diagnostics
-| Metric / Parameter | Value | Interpretation / Guardrail |
+ 
+## 2. Cohort, censoring and model selection
+| Item | Value | Note |
 | :--- | :--- | :--- |
-| **Total Cohort Size ($N$)** | {results.get('n_patients', 'N/A')} | Enrolled longitudinal cohort |
-| **Total Observed Visits** | {results.get('total_visits', 'N/A')} | Longitudinal observation visits |
-| **Floor-Censored Visits ($0.0$ Floor)** | {results.get('censored_visits', 'N/A')} ({results.get('censored_pct', 0.0):.1f}%) | Handled via Tobit Maximum Likelihood Estimation |
-| **Winning Decay Model (AICc)** | {results.get('winning_model', 'Log-Exponential')} | Selected via Akaike Information Criterion |
-| **Estimated Loss Rate** | {results.get('rate_kkode', 0.0):.3f} {results.get('unit', 'dB/yr')} | Floor-adjusted true decay trajectory |
-
+| Patients | {_show(r.get('n_patients'))} | Patients, not eyes, are the unit for sample size |
+| Visits | {_show(r.get('total_visits'))} | Longitudinal observations |
+| Floor-censored visits (floor = {floor_text}) | {censored} | Kept and modeled with a censored likelihood |
+| Best-supported decay form | {_show(r.get('winning_model'))} | Chosen by Jacobian-corrected AICc |
+| Estimated decay rate | {_show(r.get('rate_kkode'), '{:.3f}', r.get('unit') or '')} | From the fitted model |
+ 
 ---
-
-## 3. Methodological Compliance & Mathematical Guardrails
-1. **Floor Censoring Treatment:** Tobit MLE integrates probability density for values below threshold $y \le 0.0$, preventing artificial attenuation of placebo decay curves.
-2. **Identifiability Enforced:** Patient trajectories with $< 2$ uncensored observations are flagged and processed under empirical population Bayesian priors.
-3. **Power Simulation:** Sample size validated via $10,000$-iteration Monte Carlo trial simulation under empirical variance.
-
+ 
+## 3. Methods notes
+1. **Censoring.** Readings at or below the floor contribute a censored (Tobit-style) likelihood term, not a clamped or discarded value.
+2. **Identifiability.** A fit with fewer than two uncensored points is not identified, so the engine refuses it rather than producing a number.
+3. **Sample-size check.** The closed-form estimate is checked against Monte Carlo trial simulation ({_show(r.get('n_sims'))} simulated trials per candidate size). If the two disagree by more than 2x, the engine prints a warning.
+ 
+## 4. Validation status
+Validation to date is automated testing on synthetic data with planted ground truth, plus one exploratory end-to-end engineering run on the RUSH2A natural-history dataset. That run has not been independently reviewed, and no real-data results are reported here. See the README, section "Validation status & integrity".
+ 
 ---
-*Report generated automatically by K-KODE Engine v55.0. For Research Use Only (RUO).*
+*Generated from supplied values only. Research Use Only (RUO).*
 """
     with open(output_filename, "w", encoding="utf-8") as f:
         f.write(report_content)
     return output_filename
+ 
