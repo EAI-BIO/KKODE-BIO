@@ -25,7 +25,9 @@ INPUT DATA REQUIREMENTS
 ------------------------
 Your CSV must contain, at minimum, these columns:
     patient_id    - any string or numeric patient identifier
-    visit_date    - a date (any format pandas can parse, e.g. YYYY-MM-DD)
+    visit_date    - a date. YYYY-MM-DD is always unambiguous. For dd/mm/yyyy or mm/dd/yyyy the
+                    order is inferred when any date settles it (for example 31/12/2020) and the
+                    report warns when it cannot be known; force it with --dayfirst/--monthfirst.
     <endpoint>    - the numeric biomarker column you pass to --endpoint-column
                     (e.g. ez_width_mm, ez_area_mm2, static_perimetry_sensitivity_db)
 
@@ -90,6 +92,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
                          help="Optional column name identifying eye (e.g. 'eye'). Omit if not tracked.")
     parser.add_argument("--measurement-floor", type=float, default=0.05,
                          help="Value at/below which a visit is treated as floor-censored. Default: 0.05")
+    parser.add_argument("--measurement-ceiling", type=float, default=None,
+                         help="Optional upper bound: values at/above it are treated as ceiling-censored.")
+    date_order = parser.add_mutually_exclusive_group()
+    date_order.add_argument("--dayfirst", action="store_true",
+                             help="Read dd/mm/yyyy-style dates day-first. Default: infer, and warn if unknowable.")
+    date_order.add_argument("--monthfirst", action="store_true",
+                             help="Read mm/dd/yyyy-style dates month-first. Default: infer, and warn if unknowable.")
+    parser.add_argument("--plausible-min", type=float, default=None,
+                         help="Drop readings below this value (physical lower limit). Default: none dropped; "
+                              "negative values are only flagged.")
+    parser.add_argument("--plausible-max", type=float, default=None,
+                         help="Drop readings above this value (physical upper limit). Default: none dropped.")
+    parser.add_argument("--auto-detect-floor", action="store_true",
+                         help="If eyes plateau at a level different from --measurement-floor, use the detected "
+                              "floor. Default: only report the mismatch.")
     parser.add_argument("--lower-is-better", action="store_true",
                          help="Pass this flag if a LOWER endpoint value indicates disease progression "
                               "(e.g. some structural measures). Default assumes higher is better "
@@ -132,6 +149,11 @@ def main(argv=None) -> int:
             eye_column=args.eye_column,
             measurement_floor=args.measurement_floor,
             higher_is_better=not args.lower_is_better,
+            measurement_ceiling=args.measurement_ceiling,
+            dayfirst=True if args.dayfirst else (False if args.monthfirst else None),
+            plausible_min=args.plausible_min,
+            plausible_max=args.plausible_max,
+            auto_detect_floor=args.auto_detect_floor,
         )
     except (ValueError, TypeError) as e:
         print(f"ERROR initializing engine: {e}", file=sys.stderr)
