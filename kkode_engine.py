@@ -63,8 +63,9 @@ each covered by a regression test in test_kkode_engine.py:
 7. MINOR: optimizer failure check now rejects non-finite objective values;
    a warning is raised when the mean decay rate is not positive (no
    measurable decline, so a sample size is meaningless); the report footer
-   now matches the changelog (the earlier Square-Root headline is retired;
-   a RUSH2A re-run under the corrected build is still PENDING).
+   now matches the changelog (the earlier Square-Root headline is retired).
+   The RUSH2A re-run under the corrected build has since been DONE (see
+   AUDIT 6 below). Its results are unreviewed.
  
 What this audit does NOT change: the Jacobian-corrected likelihood, the
 censored MLE, parameter estimates, standard errors, or the Bayesian priors.
@@ -184,6 +185,28 @@ higher noise it confused neighbouring forms (Square-Root -> Linear,
 Log-Exponential -> Square-Root). Read the selected form as "how curved", not
 as a literal mechanism. RUSH2A findings are exploratory and unreviewed.
  
+AUDIT 7 (data preparation; no change to any statistical model): (a) readings
+written as text, such as "<0.05", were silently dropped as non-numeric. They
+are now kept and modeled as left-censored when the limit is at or below
+measurement_floor (">x" likewise against measurement_ceiling), and are dropped
+WITH A REPORTED COUNT when a single floor cannot represent them; (b) patient
+IDs are normalized (case, spacing, trailing ".0") and eye labels harmonized
+(OD/OS/R/L/Right/Left/droit/gauche and similar); unrecognized labels are kept
+and reported, not guessed, and a missing or misspelled eye_column is reported
+instead of silently pooling both eyes; (c) plausibility checks: infinite
+readings are dropped, optional plausible_min / plausible_max drop impossible
+values, and negative values (often -1 / -999 codes), extreme high outliers
+(over 10 times the median and 8 robust SD on the log scale) and future or
+pre-1900 dates are FLAGGED, never silently removed; (d) ambiguous dates:
+day-first versus month-first is inferred from the data whenever any value
+settles it, can be forced with dayfirst=, and a warning is raised when it
+cannot be known (default month-first, as before); (e) _detect_plateau_floor() now runs on every
+cleaning pass and its result is compared with measurement_floor in the data
+quality report; auto_detect_floor=True adopts a detected floor, otherwise
+measurement_floor is never changed. The plateau check cannot tell a real
+instrument floor from a decline that is simply slowing, so it only advises.
+Each item has a regression test.
+ 
 ============================================================================
 ORIGINAL v55.0 DOCUMENTATION (retained below)
 ============================================================================
@@ -232,13 +255,21 @@ WHAT THIS VERSION DELIBERATELY DOES NOT CLAIM TO DO:
   - Simulated "therapeutic efficacy" is a proportional reduction of the
     slope ON THE FITTED MODEL'S SCALE. For transformed models that is not
     the same as a proportional reduction of the raw rate.
-  - Validation so far is synthetic data with planted truth only. A
-    re-run on RUSH2A (access via Data Use Agreement; not public) and
-    independent clinical/biostatistical review are outstanding.
+  - Data preparation is checked, not guaranteed. Outliers, negative values and
+    odd dates are flagged for human review and are not removed unless
+    plausible_min / plausible_max are set; day-first versus month-first can
+    only be inferred when some date settles it.
+  - Validation so far is (1) automated tests on synthetic data with planted
+    truth and (2) one exploratory end-to-end run on the real RUSH2A EZ-area
+    data (access via Data Use Agreement; not public). The real-data run is an
+    engineering check, not a clinical validation, and its results are
+    unreviewed. Independent clinical/biostatistical review is outstanding.
   - Ceiling censoring is supported only when measurement_ceiling is given.
 """
 import os
+import re
 import logging
+import warnings
 import numpy as np
 import pandas as pd
 from scipy import stats
@@ -333,9 +364,10 @@ def _detect_plateau_floor(df: pd.DataFrame, value_column: str,
     Detect a genuine measurement floor by looking for subjects who plateau --
     multiple visits clustered tightly together near a low value over time --
     rather than just taking the low percentile of all values in the dataset.
-    Ported from TK-KODE for future use if K-KODE moves from a fixed,
-    user-supplied measurement_floor to floor auto-detection. Not currently
-    called from clean_and_transform().
+    Ported from TK-KODE. clean_and_transform() calls it on every run and
+    compares the result with the supplied measurement_floor (reported in
+    data_quality_report["plateau_floor_check"]); the floor is only replaced
+    when the engine is built with auto_detect_floor=True.
     """
     candidate = float(df[value_column].quantile(FLOOR_DETECTION_QUANTILE))
     band = max(float(df[value_column].std()) * 0.05, 1e-6)
@@ -361,6 +393,220 @@ def _detect_plateau_floor(df: pd.DataFrame, value_column: str,
     ):
         return candidate
     return None
+
+
+# ======================================================================
+# Data-preparation helpers (Audit 7)
+# ======================================================================
+# Text-censored readings such as "<0.05", "< 0.05", "<=0.05" or ">36".
+_CENSOR_TEXT_RE = re.compile(
+    r"^\s*(<=|>=|<|>|≤|≥)\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)\s*$"
+)
+_LOWER_CENSOR_OPS = ("<", "<=", "≤")
+
+# Dates that are unambiguous (year first) versus a/b/yyyy where a and b could
+# be day or month.
+_ISO_DATE_RE = re.compile(r"^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}(?:[T ].*)?$")
+_NUMERIC_DATE_RE = re.compile(r"^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2}|\d{4})(?:[T ].*)?$")
+
+# Eye labels seen in clinical exports, mapped to one canonical label. Keys are
+# upper-cased with everything except letters and digits removed.
+_EYE_LABELS = {
+    "OD": "OD", "R": "OD", "RE": "OD", "RT": "OD", "RIGHT": "OD", "RIGHTEYE": "OD",
+    "OCULUSDEXTER": "OD", "DROIT": "OD", "OEILDROIT": "OD",
+    "OS": "OS", "L": "OS", "LE": "OS", "LT": "OS", "LEFT": "OS", "LEFTEYE": "OS",
+    "OCULUSSINISTER": "OS", "GAUCHE": "OS", "OEILGAUCHE": "OS",
+    "OU": "OU", "BOTH": "OU", "BOTHEYES": "OU",
+}
+
+IMPLAUSIBLE_OUTLIER_MAD_MULTIPLE = 8.0   # robust SDs on the log scale; flag-only, deliberately loose
+IMPLAUSIBLE_OUTLIER_MIN_FACTOR = 10.0     # and at least this many times the cohort median
+MIN_ROWS_FOR_OUTLIER_FLAG = 20
+PLATEAU_TOLERANCE_BANDS = 2.0            # same "near the floor" width _detect_plateau_floor uses
+MAX_EXAMPLES_IN_REPORT = 5
+
+
+def _to_datetime_mixed(values: pd.Series, dayfirst: bool) -> pd.Series:
+    """pd.to_datetime that tolerates several formats in one column
+    (pandas >= 2 would otherwise infer one format from the first element and
+    turn every other format into NaT)."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        try:
+            return pd.to_datetime(values, errors="coerce", dayfirst=dayfirst, format="mixed")
+        except (TypeError, ValueError):
+            return pd.to_datetime(values, errors="coerce", dayfirst=dayfirst)
+
+
+def _parse_visit_dates(series: pd.Series, dayfirst: Optional[bool] = None) -> Tuple[pd.Series, Dict[str, Any]]:
+    """Parse visit dates without silently guessing dd/mm versus mm/dd.
+
+    Year-first dates (2020-03-04) are always unambiguous. For a/b/yyyy dates:
+    if any first number is > 12 the column is day-first; if any second number
+    is > 12 it is month-first; if neither, the text is genuinely ambiguous
+    and is read month-first (the historical default) with a warning. Passing
+    dayfirst=True/False overrides everything. Returns (datetimes, info)."""
+    info: Dict[str, Any] = {"interpretation": "not applicable", "rows_ambiguous": 0,
+                            "rows_first_number_over_12": 0, "rows_second_number_over_12": 0,
+                            "mixed_conventions": False, "note": None, "warning": None}
+    s = series.reset_index(drop=True)
+    is_str = s.map(lambda v: isinstance(v, str))
+    pieces = []
+
+    if (~is_str).any():                       # Timestamps, date objects, numbers, already-datetime
+        non_str = s[~is_str]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            pieces.append(pd.to_datetime(non_str, errors="coerce"))
+
+    if is_str.any():
+        txt = s[is_str].str.strip()
+        iso = txt.map(lambda v: bool(_ISO_DATE_RE.match(v)))
+        num_match = txt.map(lambda v: _NUMERIC_DATE_RE.match(v))
+        is_num = num_match.map(lambda m: m is not None)
+        other = ~(iso | is_num)
+
+        first = num_match[is_num].map(lambda m: int(m.group(1)))
+        second = num_match[is_num].map(lambda m: int(m.group(2)))
+        n_first_gt12 = int((first > 12).sum())
+        n_second_gt12 = int((second > 12).sum())
+        n_ambiguous = int(((first <= 12) & (second <= 12) & (first != second)).sum())
+        info.update(rows_ambiguous=n_ambiguous, rows_first_number_over_12=n_first_gt12,
+                    rows_second_number_over_12=n_second_gt12)
+
+        if len(first) == 0:
+            use_dayfirst, info["interpretation"] = False, "no day/month-ambiguous text present"
+        elif dayfirst is not None:
+            use_dayfirst = bool(dayfirst)
+            info["interpretation"] = f"{'day-first' if use_dayfirst else 'month-first'} (user-specified)"
+        elif n_first_gt12 > 0 and n_second_gt12 == 0:
+            use_dayfirst = True
+            info["interpretation"] = "day-first (inferred)"
+            if n_ambiguous:
+                info["note"] = (f"Dates were read day-first because {n_first_gt12} rows have a first number "
+                                f"above 12 and none have a second number above 12; {n_ambiguous} rows could "
+                                "have been read either way and follow the same convention.")
+        elif n_second_gt12 > 0 and n_first_gt12 == 0:
+            use_dayfirst = False
+            info["interpretation"] = "month-first (inferred)"
+            if n_ambiguous:
+                info["note"] = (f"Dates were read month-first because {n_second_gt12} rows have a second "
+                                f"number above 12 and none have a first number above 12; {n_ambiguous} "
+                                "rows could have been read either way and follow the same convention.")
+        elif n_first_gt12 > 0 and n_second_gt12 > 0:
+            use_dayfirst = False
+            info["mixed_conventions"] = True
+            info["interpretation"] = "month-first (default; conventions are mixed)"
+            info["warning"] = (f"Visit dates mix conventions: {n_first_gt12} rows can only be day-first and "
+                               f"{n_second_gt12} can only be month-first. Those rows are read correctly, but "
+                               f"the {n_ambiguous} rows that could be either follow the month-first default "
+                               "and may be wrong. Fix the source file or pass dayfirst=True/False.")
+        else:
+            use_dayfirst = False
+            info["interpretation"] = "month-first (default; no evidence either way)"
+            if n_ambiguous:
+                info["warning"] = (f"{n_ambiguous} visit dates (for example 03/04/2020) could be day-first or "
+                                   "month-first and were read MONTH-FIRST. If your source writes day first, "
+                                   "pass dayfirst=True; a wrong guess shifts time between visits.")
+
+        if iso.any():
+            pieces.append(_to_datetime_mixed(txt[iso], dayfirst=False))
+        if is_num.any():
+            pieces.append(_to_datetime_mixed(txt[is_num], dayfirst=use_dayfirst))
+        if other.any():
+            pieces.append(_to_datetime_mixed(txt[other], dayfirst=False))
+
+    if pieces:
+        out = pd.concat(pieces).reindex(s.index)
+        out = pd.to_datetime(out, errors="coerce")
+    else:
+        out = pd.Series(pd.NaT, index=s.index, dtype="datetime64[ns]")
+    out.index = series.index
+    return out, info
+
+
+def _normalize_patient_ids(series: pd.Series) -> Tuple[pd.Series, Dict[str, Any]]:
+    """Make patient identifiers comparable: trim and collapse whitespace,
+    upper-case, and remove the trailing '.0' that appears when an integer ID
+    column is read as float. Missing IDs stay missing. Returns (ids, info)."""
+    def _norm(v: Any) -> Any:
+        s = re.sub(r"\s+", " ", str(v).strip())
+        if re.fullmatch(r"[-+]?\d+\.0+", s):
+            s = s.split(".")[0]
+        return s.upper() if s != "" else np.nan
+
+    raw_vals = series.to_numpy(dtype=object, copy=True)
+    spellings: Dict[str, set] = {}
+    out_vals = np.empty(len(raw_vals), dtype=object)
+    for i, v in enumerate(raw_vals):
+        if v is None or (not isinstance(v, str) and pd.isna(v)):
+            out_vals[i] = np.nan
+            continue
+        n = _norm(v)
+        out_vals[i] = n
+        if isinstance(n, str):
+            spellings.setdefault(n, set()).add(str(v))
+    merged = {k: sorted(v) for k, v in spellings.items() if len(v) > 1}
+    info: Dict[str, Any] = {
+        "patient_ids_merged_by_normalization": len(merged),
+        "examples": {k: merged[k][:4] for k in list(merged)[:MAX_EXAMPLES_IN_REPORT]},
+    }
+    return pd.Series(out_vals, index=series.index, dtype="object"), info
+
+
+def _canonical_eye_label(value: Any) -> Tuple[str, bool]:
+    """Returns (label, recognized). Unrecognized labels are kept (upper-cased)
+    rather than guessed."""
+    raw = str(value).strip()
+    key = re.sub(r"[^A-Z0-9]", "", raw.upper().replace("Œ", "OE"))
+    if key in _EYE_LABELS:
+        return _EYE_LABELS[key], True
+    return raw.upper(), False
+
+
+def _parse_endpoint_values(series: pd.Series, floor: float, ceiling: Optional[float]
+                           ) -> Tuple[pd.Series, pd.Series, Dict[str, Any]]:
+    """Numeric endpoint with text-censored readings handled, not dropped.
+
+    '<x' (or '<=x', '≤x') means 'below the detection limit x'. If x is at or
+    below the engine's measurement_floor it is recorded AS the floor so it is
+    modeled as left-censored. If x is ABOVE the floor the true bound is not the
+    floor, so the row cannot be modeled correctly with a single floor; it is
+    dropped and reported (raise measurement_floor to x to keep it). '>x' works
+    the same way against measurement_ceiling.
+    Returns (numeric values, boolean mask of rows dropped for that reason, info)."""
+    info: Dict[str, Any] = {"rows_text_censored_at_floor": 0, "rows_text_censored_at_ceiling": 0,
+                            "rows_dropped_text_limit_above_floor": 0, "rows_dropped_text_limit_below_ceiling": 0,
+                            "limits_above_floor": [], "limits_below_ceiling": []}
+    arr = pd.to_numeric(series, errors="coerce").to_numpy(dtype=float, copy=True)
+    dropped = np.zeros(len(series), dtype=bool)
+    above_floor, below_ceiling = set(), set()
+    for i, v in enumerate(series.to_numpy(dtype=object)):
+        if not isinstance(v, str):
+            continue
+        m = _CENSOR_TEXT_RE.match(v)
+        if m is None:
+            continue
+        op, limit = m.group(1), float(m.group(2))
+        if op in _LOWER_CENSOR_OPS:
+            if limit <= floor:
+                arr[i] = floor
+                info["rows_text_censored_at_floor"] += 1
+            else:
+                arr[i], dropped[i] = np.nan, True
+                info["rows_dropped_text_limit_above_floor"] += 1
+                above_floor.add(limit)
+        else:
+            if ceiling is not None and limit >= ceiling:
+                arr[i] = ceiling
+                info["rows_text_censored_at_ceiling"] += 1
+            else:
+                arr[i], dropped[i] = np.nan, True
+                info["rows_dropped_text_limit_below_ceiling"] += 1
+                below_ceiling.add(limit)
+    info["limits_above_floor"] = sorted(above_floor)[:MAX_EXAMPLES_IN_REPORT]
+    info["limits_below_ceiling"] = sorted(below_ceiling)[:MAX_EXAMPLES_IN_REPORT]
+    return pd.Series(arr, index=series.index), pd.Series(dropped, index=series.index), info
  
  
 # ======================================================================
@@ -570,11 +816,25 @@ class KKodeApexEngine:
     """
     REQUIRED_BASE_COLUMNS = ['patient_id', 'visit_date']
     ENGINE_VERSION = "v55.0"
-    BUILD_TAG = "jacobian-fix + audit-6"
+    BUILD_TAG = "jacobian-fix + audit-7"
  
     def __init__(self, data_source: Union[str, pd.DataFrame], endpoint_column: str,
                  eye_column: Optional[str] = None, measurement_floor: float = 0.05,
-                 higher_is_better: bool = True, measurement_ceiling: Optional[float] = None):
+                 higher_is_better: bool = True, measurement_ceiling: Optional[float] = None,
+                 dayfirst: Optional[bool] = None,
+                 plausible_min: Optional[float] = None, plausible_max: Optional[float] = None,
+                 auto_detect_floor: bool = False):
+        """
+        dayfirst: None (default) infers day/month order from the data and warns
+            when it cannot; True/False forces it for dd/mm/yyyy-style dates.
+        plausible_min / plausible_max: optional physical limits for the endpoint.
+            Rows outside them are dropped and counted. Left as None, nothing is
+            dropped for range; suspicious values are only flagged.
+        auto_detect_floor: when True and a plateau floor is detected in the
+            data, use it instead of measurement_floor (reported). When False
+            (default) the detection still runs and a mismatch is reported, but
+            measurement_floor is never changed silently.
+        """
         if isinstance(data_source, str):
             if not os.path.exists(data_source):
                 raise FileNotFoundError(f"Target file path not found: {data_source}")
@@ -596,6 +856,13 @@ class KKodeApexEngine:
             raise ValueError("measurement_ceiling must be greater than measurement_floor.")
         self.measurement_ceiling = measurement_ceiling
         self.higher_is_better = higher_is_better
+        if plausible_min is not None and plausible_max is not None and not plausible_max > plausible_min:
+            raise ValueError("plausible_max must be greater than plausible_min.")
+        self.dayfirst = dayfirst
+        self.plausible_min = plausible_min
+        self.plausible_max = plausible_max
+        self.auto_detect_floor = bool(auto_detect_floor)
+        self._supplied_measurement_floor = measurement_floor   # what the caller asked for
         self.clean_df: pd.DataFrame = pd.DataFrame()
         self.data_quality_report: Dict[str, Any] = {}
         self.per_patient_fits: Dict[str, Dict[str, Any]] = {}
@@ -608,30 +875,211 @@ class KKodeApexEngine:
         self.censored_population_results: Dict[str, Any] = {}
  
     def clean_and_transform(self) -> pd.DataFrame:
+        """Audit the raw table, repair what can be repaired safely, and report
+        everything dropped, changed or flagged in data_quality_report
+        ("data_prep_notes" lists the human-readable items)."""
         n_start = len(self.raw_df)
-        df = self.raw_df.copy()
+        df = self.raw_df.copy().reset_index(drop=True)
         col = self.endpoint_column
- 
+        notes: List[str] = []
+
+        # ---- identifiers: patient IDs and eye labels (Audit 7) -------------
+        df["patient_id"], pid_info = _normalize_patient_ids(df["patient_id"])
+        if pid_info["patient_ids_merged_by_normalization"]:
+            notes.append(
+                f"{pid_info['patient_ids_merged_by_normalization']} patient IDs were written in more than one "
+                "way (case, spacing or a trailing '.0') and were merged into one patient each: "
+                f"{pid_info['examples']}."
+            )
+
+        eye_present = bool(self.eye_column) and self.eye_column in df.columns
+        eye_changed: Dict[str, str] = {}
+        eye_unrecognized: List[str] = []
+        n_missing_eye = 0
+        if self.eye_column and not eye_present:
+            msg = (f"eye_column='{self.eye_column}' was given but is not a column in the data, so both eyes "
+                   "of a patient are pooled into ONE series per patient. Check the column name.")
+            notes.append(msg)
+            logger.warning(msg)
+        if eye_present:
+            raw_eye = df[self.eye_column].to_numpy(dtype=object)
+            new_eye = np.empty(len(raw_eye), dtype=object)
+            unrec = set()
+            for i, v in enumerate(raw_eye):
+                if v is None or (not isinstance(v, str) and pd.isna(v)) or str(v).strip() == "":
+                    new_eye[i] = "UNKNOWN"
+                    n_missing_eye += 1
+                    continue
+                label, recognized = _canonical_eye_label(v)
+                new_eye[i] = label
+                if not recognized:
+                    unrec.add(str(v).strip())
+                elif str(v) != label:
+                    eye_changed[str(v)] = label
+            df[self.eye_column] = new_eye
+            eye_unrecognized = sorted(unrec)[:MAX_EXAMPLES_IN_REPORT * 2]
+            if eye_changed:
+                shown = dict(list(eye_changed.items())[:MAX_EXAMPLES_IN_REPORT * 2])
+                notes.append(f"Eye labels were harmonized to OD/OS: {shown}.")
+            if eye_unrecognized:
+                notes.append(f"Unrecognized eye labels were kept as their own separate eyes (not guessed): "
+                             f"{eye_unrecognized}. Check that no label is a duplicate spelling of OD or OS.")
+            if n_missing_eye:
+                notes.append(f"{n_missing_eye} rows have no eye label and were grouped as eye 'UNKNOWN' per patient.")
+            if "OU" in set(new_eye):
+                notes.append("Some rows are labelled OU (both eyes). They are modeled as a separate 'OU' series, "
+                             "not split into OD and OS; supply one row per eye if possible.")
+
         n_missing = df[['patient_id', 'visit_date', col]].isna().any(axis=1).sum()
         df = df.dropna(subset=['patient_id', 'visit_date', col]).copy()
- 
-        parsed_dates = pd.to_datetime(df['visit_date'], errors='coerce')
+
+        # ---- visit dates: never guess day/month silently (Audit 7) ---------
+        parsed_dates, date_info = _parse_visit_dates(df['visit_date'], self.dayfirst)
         n_bad_dates = parsed_dates.isna().sum()
         df = df.assign(visit_date=parsed_dates).dropna(subset=['visit_date'])
- 
-        numeric_val = pd.to_numeric(df[col], errors='coerce')
-        n_non_numeric = numeric_val.isna().sum()
+        if date_info["warning"]:
+            notes.append(date_info["warning"])
+        elif date_info["note"]:
+            notes.append(date_info["note"])
+        n_odd_dates = 0
+        try:
+            n_odd_dates = int(((df['visit_date'] > pd.Timestamp.now() + pd.Timedelta(days=1)) |
+                               (df['visit_date'] < pd.Timestamp("1900-01-01"))).sum())
+        except (TypeError, ValueError):
+            pass
+        if n_odd_dates:
+            notes.append(f"{n_odd_dates} visit dates are in the future or before 1900 (flagged, kept). "
+                         "Check for a typo in the year.")
+
+        # ---- endpoint: text-censored readings are modeled, not dropped -----
+        numeric_val, text_dropped, text_info = _parse_endpoint_values(
+            df[col], self.measurement_floor, self.measurement_ceiling)
+        n_text_dropped = int(text_dropped.sum())
+        n_non_numeric = int((numeric_val.isna() & ~text_dropped).sum())
         df = df.assign(**{col: numeric_val}).dropna(subset=[col])
- 
-        n_at_or_below_floor = int((df[col] <= self.measurement_floor).sum())
-        n_at_or_above_ceiling = (int((df[col] >= self.measurement_ceiling).sum())
-                                 if self.measurement_ceiling is not None else 0)
- 
-        if self.eye_column and self.eye_column in df.columns:
+        if text_info["rows_text_censored_at_floor"]:
+            notes.append(f"{text_info['rows_text_censored_at_floor']} readings written as '<limit' (for example "
+                         f"'<0.05') were kept and modeled as floor-censored.")
+        if text_info["rows_text_censored_at_ceiling"]:
+            notes.append(f"{text_info['rows_text_censored_at_ceiling']} readings written as '>limit' were kept "
+                         f"and modeled as ceiling-censored.")
+        if text_info["rows_dropped_text_limit_above_floor"]:
+            notes.append(
+                f"{text_info['rows_dropped_text_limit_above_floor']} readings written as '<x' with x above "
+                f"measurement_floor ({self.measurement_floor:g}; limits seen: {text_info['limits_above_floor']}) "
+                "were DROPPED: a single floor cannot represent them. If x is the instrument's true limit of "
+                "detection, set measurement_floor to x to keep them as censored."
+            )
+        if text_info["rows_dropped_text_limit_below_ceiling"]:
+            notes.append(
+                f"{text_info['rows_dropped_text_limit_below_ceiling']} readings written as '>x' were DROPPED "
+                f"because no measurement_ceiling at or below x was given (limits seen: "
+                f"{text_info['limits_below_ceiling']}). Set measurement_ceiling to keep them as censored."
+            )
+
+        # ---- plausibility (Audit 7): drop impossible numbers, flag suspicious ones
+        finite = np.isfinite(df[col].to_numpy(dtype=float))
+        n_non_finite = int((~finite).sum())
+        df = df[finite].copy()
+        n_range_dropped = 0
+        if self.plausible_min is not None or self.plausible_max is not None:
+            out_of_range = pd.Series(False, index=df.index)
+            if self.plausible_min is not None:
+                out_of_range |= df[col] < self.plausible_min
+            if self.plausible_max is not None:
+                out_of_range |= df[col] > self.plausible_max
+            n_range_dropped = int(out_of_range.sum())
+            df = df[~out_of_range].copy()
+            if n_range_dropped:
+                notes.append(f"{n_range_dropped} readings outside plausible_min/plausible_max "
+                             f"({self.plausible_min}, {self.plausible_max}) were dropped.")
+        if n_non_finite:
+            notes.append(f"{n_non_finite} readings were infinite and were dropped.")
+        vals = df[col].to_numpy(dtype=float)
+        n_negative = int((vals < 0).sum())
+        if n_negative and self.plausible_min is None and self.measurement_floor >= 0:
+            notes.append(
+                f"{n_negative} readings are negative. They are at/below the floor, so they are modeled as "
+                "floor-censored. If they are missing-value codes (such as -1 or -999) remove them first or set "
+                "plausible_min=0, otherwise they are treated as real floor readings."
+            )
+        ceiling_for_range = self.measurement_ceiling if self.measurement_ceiling is not None else np.inf
+        # Extreme HIGH readings only (a wrong unit or an extra digit). Judged on the log scale
+        # because retinal measures are right-skewed; low readings are legitimately near the floor.
+        pos = (vals > self.measurement_floor) & (vals < ceiling_for_range) & (vals > 0)
+        outlier_examples: List[Dict[str, Any]] = []
+        n_outliers = 0
+        if int(pos.sum()) >= MIN_ROWS_FOR_OUTLIER_FLAG:
+            log_all = np.log(np.where(pos, vals, 1.0))
+            med = float(np.median(log_all[pos]))
+            mad = float(np.median(np.abs(log_all[pos] - med))) * 1.4826
+            threshold = max(IMPLAUSIBLE_OUTLIER_MAD_MULTIPLE * mad, float(np.log(IMPLAUSIBLE_OUTLIER_MIN_FACTOR)))
+            is_outlier = pos & ((log_all - med) > threshold)
+            n_outliers = int(is_outlier.sum())
+            for _, r in df[is_outlier].head(MAX_EXAMPLES_IN_REPORT).iterrows():
+                outlier_examples.append({"patient_id": str(r["patient_id"]),
+                                         "visit_date": str(pd.Timestamp(r["visit_date"]).date()),
+                                         "value": float(r[col])})
+        if n_outliers:
+            notes.append(f"{n_outliers} readings are extreme high outliers (more than "
+                         f"{IMPLAUSIBLE_OUTLIER_MIN_FACTOR:g} times the cohort median and more than "
+                         f"{IMPLAUSIBLE_OUTLIER_MAD_MULTIPLE:g} robust SDs on the log scale) and were "
+                         f"flagged, not removed. Examples: {outlier_examples}. Check for unit or typing errors.")
+
+        if eye_present:
             df = df.assign(group_id=df['patient_id'].astype(str) + "__" + df[self.eye_column].astype(str))
         else:
             df = df.assign(group_id=df['patient_id'].astype(str))
- 
+
+        # ---- plateau-aware floor check (Audit 7: wired into the pipeline) --
+        plateau_info: Dict[str, Any] = {
+            "measurement_floor_supplied": float(self._supplied_measurement_floor),
+            "detected_plateau_floor": None,
+            "auto_detect_floor": self.auto_detect_floor,
+        }
+        if len(df) >= 10:
+            detected = None
+            try:
+                detected = _detect_plateau_floor(df, col, subject_column="group_id", date_column="visit_date")
+            except Exception as exc:  # detection is advisory; never break cleaning
+                plateau_info["error"] = f"{type(exc).__name__}: {exc}"
+            if detected is not None and np.isfinite(detected):
+                detected = float(detected)
+                plateau_info["detected_plateau_floor"] = detected
+                band = max(float(df[col].std()) * 0.05, 1e-6)
+                tolerance = PLATEAU_TOLERANCE_BANDS * band
+                gap = detected - float(self.measurement_floor)
+                if abs(gap) > tolerance:
+                    if self.auto_detect_floor:
+                        if self.measurement_ceiling is None or detected < self.measurement_ceiling:
+                            notes.append(
+                                f"measurement_floor was changed from {self.measurement_floor:g} to "
+                                f"{detected:.4g} because eyes plateau there (auto_detect_floor=True).")
+                            self.measurement_floor = detected
+                        else:
+                            notes.append(
+                                f"A plateau floor of {detected:.4g} was detected but it is not below "
+                                f"measurement_ceiling={self.measurement_ceiling:g}; measurement_floor "
+                                f"{self.measurement_floor:g} was kept.")
+                    elif gap > 0:
+                        notes.append(
+                            f"Eyes reach a plateau near {detected:.4g}, but measurement_floor is "
+                            f"{self.measurement_floor:g}. If {detected:.4g} is the lowest value the instrument "
+                            "can report, readings stuck there are being treated as real measurements, which "
+                            f"makes decline look like it stopped: pass measurement_floor={detected:.4g} or "
+                            "auto_detect_floor=True. If decline is simply slowing down, no action is needed "
+                            "(this check cannot tell the two apart).")
+                    else:
+                        notes.append(
+                            f"Eyes reach a plateau near {detected:.4g}, below measurement_floor "
+                            f"{self.measurement_floor:g}. Readings between the two are modeled as censored; "
+                            "confirm that floor is the instrument's true limit.")
+        plateau_info["measurement_floor_in_use"] = float(self.measurement_floor)
+
+        n_at_or_below_floor = int((df[col] <= self.measurement_floor).sum())
+        n_at_or_above_ceiling = (int((df[col] >= self.measurement_ceiling).sum())
+                                 if self.measurement_ceiling is not None else 0)
+
         # Audit 5: byte-identical repeats of the same patient/eye/date/value are
         # data-entry artifacts and would double-count information; drop them
         # (and say so). Same date with DIFFERENT values is kept and warned.
@@ -640,13 +1088,13 @@ class KKodeApexEngine:
         df = df[~exact_dup].copy()
         dup_mask = df.duplicated(subset=['group_id', 'visit_date'], keep=False)
         n_dup = int(dup_mask.sum())
- 
+
         # Audit 3: time zero is the PATIENT's first visit, shared by both
         # eyes. (It was each eye's own first visit, so an eye missing its
         # baseline visit got a different time origin than its fellow eye.)
         patient_baseline = df.groupby('patient_id')['visit_date'].transform('min')
         df = df.assign(_baseline=patient_baseline)
- 
+
         processed = []
         n_single = 0
         for gid, group in df.groupby('group_id'):
@@ -656,12 +1104,12 @@ class KKodeApexEngine:
             baseline = group['_baseline'].iloc[0]
             group['years_from_baseline'] = (group['visit_date'] - baseline).dt.days / 365.25
             processed.append(group)
- 
+
         if processed:
             self.clean_df = pd.concat(processed, ignore_index=True)
         else:
             self.clean_df = df.assign(years_from_baseline=pd.Series(dtype=float))
- 
+
         censoring_fraction = (n_at_or_below_floor / n_start) if n_start else 0.0
         total_censoring_fraction = ((n_at_or_below_floor + n_at_or_above_ceiling) / n_start) if n_start else 0.0
         self.data_quality_report = {
@@ -672,6 +1120,12 @@ class KKodeApexEngine:
             "rows_dropped_missing_required_fields": int(n_missing),
             "rows_dropped_unparseable_date": int(n_bad_dates),
             "rows_dropped_non_numeric_endpoint": int(n_non_numeric),
+            "rows_dropped_text_censored_limit_above_floor": text_info["rows_dropped_text_limit_above_floor"],
+            "rows_dropped_text_censored_limit_below_ceiling": text_info["rows_dropped_text_limit_below_ceiling"],
+            "rows_dropped_non_finite_endpoint": n_non_finite,
+            "rows_dropped_outside_plausible_range": n_range_dropped,
+            "rows_text_censored_at_floor": text_info["rows_text_censored_at_floor"],
+            "rows_text_censored_at_ceiling": text_info["rows_text_censored_at_ceiling"],
             "rows_at_or_below_measurement_floor": n_at_or_below_floor,
             "floor_censoring_fraction_of_raw_input": round(censoring_fraction, 4),
             "rows_at_or_above_measurement_ceiling": n_at_or_above_ceiling,
@@ -684,6 +1138,18 @@ class KKodeApexEngine:
             "rows_retained_for_modeling": int(len(self.clean_df)),
             "duplicate_same_date_rows": n_dup,
             "exact_duplicate_rows_dropped": n_exact_dup,
+            "patient_ids_merged_by_normalization": pid_info["patient_ids_merged_by_normalization"],
+            "eye_labels_harmonized": eye_changed,
+            "eye_labels_unrecognized": eye_unrecognized,
+            "rows_missing_eye_label": n_missing_eye,
+            "date_interpretation": date_info["interpretation"],
+            "dates_ambiguous_rows": date_info["rows_ambiguous"],
+            "rows_future_or_pre1900_dates_flagged": n_odd_dates,
+            "rows_negative_endpoint": n_negative,
+            "rows_extreme_outliers_flagged": n_outliers,
+            "extreme_outlier_examples": outlier_examples,
+            "plateau_floor_check": plateau_info,
+            "data_prep_notes": notes,
         }
         if not self.clean_df.empty:
             self.data_quality_report["n_patients"] = int(self.clean_df["patient_id"].nunique())
@@ -708,7 +1174,7 @@ class KKodeApexEngine:
         for k, v in self.data_quality_report.items():
             logger.info(f"{k}: {v}")
         return self.clean_df
- 
+
     def unique_group_ids(self) -> List[str]:
         if self.clean_df.empty:
             self.clean_and_transform()
@@ -1760,6 +2226,8 @@ class KKodeApexEngine:
             )
         if "heavy_censoring_warning" in dq:
             lines.append(f"  WARNING: {dq['heavy_censoring_warning']}")
+        for note in dq.get("data_prep_notes", []):
+            lines.append(f"  DATA NOTE: {note}")
         lines.append("")
         lines.append("BEST-SUPPORTED FUNCTIONAL FORM (Jacobian-corrected)")
         if "overall_best_supported_model" in ms:
@@ -1841,9 +2309,9 @@ class KKodeApexEngine:
             lines.append(f"  Not run or unavailable: {(sim or {}).get('error', 'not run')}")
         lines.append("=" * 70)
         lines.append("This report is a planning aid, not a finalized protocol, and the engine is")
-        lines.append("not FDA-qualified. Validation to date: synthetic data with planted truth.")
-        lines.append("A first exploratory run on RUSH2A (data-use-agreement data) is done; its")
-        lines.append("findings are unreviewed.")
+        lines.append("not FDA-qualified. Validation to date: tests on synthetic data with planted truth,")
+        lines.append("plus one exploratory run on real RUSH2A data (data-use-agreement data) that is")
+        lines.append("an engineering check, not clinical validation; its findings are unreviewed.")
         lines.append("Independent clinical/biostatistical review is still outstanding. See the")
         lines.append("module docstring for what this engine does and does not do.")
         return "\n".join(lines)
@@ -1851,4 +2319,3 @@ class KKodeApexEngine:
  
 if __name__ == "__main__":
     print(f"K-KODE Engine {KKodeApexEngine.ENGINE_VERSION} ({KKodeApexEngine.BUILD_TAG}) initialized successfully.")
- 
