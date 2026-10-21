@@ -1,12 +1,12 @@
 """
-run_demo.py — Built-in validation demo for the K-KODE Engine (v55.0)
+run_demo.py — Built-in synthetic-data demo for the K-KODE Engine (v55.0)
 
 Generates a 60-patient synthetic longitudinal cohort (120 eyes, 4 visits
 each, matching a RUSH2A-style annual visit schedule) from a known
 exponential decay process, runs it through the full K-KODE pipeline, and
 prints the executive report.
 
-This is a synthetic-data smoke test, not a validation against real
+This is a synthetic-data demonstration, not a validation against real
 patient data — its purpose is to prove the pipeline installs and runs
 correctly end to end on your machine before you point it at a real
 clinical export.
@@ -23,7 +23,7 @@ from kkode_engine import KKodeApexEngine
 
 def generate_rush2a_synthetic_cohort(n_patients: int = 60, seed: int = 42) -> pd.DataFrame:
     """Generates a synthetic longitudinal perimetry-sensitivity dataset with
-    exponential decay and a measurement floor, for demo/smoke-test purposes only."""
+    exponential decay and a measurement floor, for demonstration purposes only."""
     rng = np.random.default_rng(seed)
     records = []
 
@@ -34,7 +34,7 @@ def generate_rush2a_synthetic_cohort(n_patients: int = 60, seed: int = 42) -> pd
             decay_lambda = max(rng.normal(0.18, 0.05), 0.01)  # ~18% annual loss
 
             for yr in [0.0, 1.0, 2.0, 3.0]:
-                visit_date = pd.Timestamp("2024-01-01") + pd.Timedelta(days=int(yr * 365.25))
+                visit_date = pd.Timestamp("2020-01-01") + pd.Timedelta(days=int(yr * 365.25))
                 true_val = y0 * np.exp(-decay_lambda * yr) + rng.normal(0, 0.4)
                 obs_val = max(0.05, float(true_val))  # measurement floor
 
