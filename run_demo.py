@@ -75,4 +75,4 @@ if __name__ == "__main__":
     print("\n" + engine.generate_report())
     print("\nIf you see a report above with no errors, your installation is working "
           "correctly. Next step: point run_kkode.py or your own script at a real "
-          "clinical CSV — see the README's 'Running on Your Own Data' section.")
+                    "clinical CSV — see the README's 'Usage' section.")
