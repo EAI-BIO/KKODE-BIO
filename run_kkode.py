@@ -107,10 +107,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--auto-detect-floor", action="store_true",
                          help="If eyes plateau at a level different from --measurement-floor, use the detected "
                               "floor. Default: only report the mismatch.")
-    parser.add_argument("--lower-is-better", action="store_true",
-                         help="Pass this flag if a LOWER endpoint value indicates disease progression "
-                              "(e.g. some structural measures). Default assumes higher is better "
-                              "(e.g. sensitivity, EZ area).")
+     parser.add_argument("--lower-is-better", action="store_true",
+                         help="Reserved for future use. The analysis detects the direction of "
+                              "change from the data, so this flag currently has no effect on "
+                              "the results.")
     parser.add_argument("--target-power", type=float, default=0.80, help="Target statistical power. Default: 0.80")
     parser.add_argument("--alpha", type=float, default=0.05, help="Significance threshold. Default: 0.05")
     parser.add_argument("--therapeutic-efficacy", type=float, default=0.30,
